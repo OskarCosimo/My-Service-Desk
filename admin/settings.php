@@ -334,7 +334,7 @@ $ragItemCount = $pdo->query("SELECT COUNT(*) FROM rag_knowledge")->fetchColumn()
 
             <!-- RAG Knowledge Base Integration -->
             <div class="card mb-4 shadow-sm">
-                <div class="card-header bg-dark text-white"><i class="fa-solid fa-book-bookmark me-2"></i> RAG Knowledge Base (RSS Feeds for ToS & Privacy)</div>
+                <div class="card-header bg-dark text-white"><i class="fa-solid fa-book-bookmark me-2"></i> RAG Knowledge Base (XML RSS / Atom Feeds)</div>
                 <div class="card-body">
                     <div class="mb-3 form-check">
                         <input type="hidden" name="settings[rag_enabled]" value="0">
@@ -342,14 +342,19 @@ $ragItemCount = $pdo->query("SELECT COUNT(*) FROM rag_knowledge")->fetchColumn()
                         <label class="form-check-label fw-bold" for="enableRag">Enable RAG Document Retrieval for AI</label>
                     </div>
 
+                    <div class="alert alert-info py-2 small">
+                        <i class="fa-solid fa-circle-info me-1"></i>
+                        Provide public, accessible <strong>RSS 2.0 or Atom XML</strong> feed URLs. Do <strong>not</strong> enter links to standard web pages (HTML), PDF files, or images. The crawler parses XML tags (such as <code>&lt;title&gt;</code>, <code>&lt;description&gt;</code>, or <code>&lt;content:encoded&gt;</code>) to index relevant textual chunks into MySQL for contextual AI grounding.
+                    </div>
+
                     <div class="row">
                         <div class="col-md-6 mb-3">
-                            <label class="form-label">Terms of Service RSS Feed URL</label>
-                            <input type="url" name="settings[rag_tos_feed_url]" class="form-control" placeholder="https://myetv.tv/rss/tos" value="<?php echo htmlspecialchars(get_setting($pdo, 'rag_tos_feed_url', '')); ?>">
+                            <label class="form-label fw-bold">Knowledge Base RSS Feed 1 (XML)</label>
+                            <input type="url" name="settings[rag_feed_url_1]" class="form-control" placeholder="https://example.com/feed.xml" value="<?php echo htmlspecialchars(get_setting($pdo, 'rag_feed_url_1', get_setting($pdo, 'rag_tos_feed_url', ''))); ?>">
                         </div>
                         <div class="col-md-6 mb-3">
-                            <label class="form-label">Privacy Policy RSS Feed URL</label>
-                            <input type="url" name="settings[rag_privacy_feed_url]" class="form-control" placeholder="https://myetv.tv/rss/privacy" value="<?php echo htmlspecialchars(get_setting($pdo, 'rag_privacy_feed_url', '')); ?>">
+                            <label class="form-label fw-bold">Knowledge Base RSS Feed 2 (XML - Optional)</label>
+                            <input type="url" name="settings[rag_feed_url_2]" class="form-control" placeholder="https://example.com/policies.xml" value="<?php echo htmlspecialchars(get_setting($pdo, 'rag_feed_url_2', get_setting($pdo, 'rag_privacy_feed_url', ''))); ?>">
                         </div>
                     </div>
 
@@ -357,7 +362,7 @@ $ragItemCount = $pdo->query("SELECT COUNT(*) FROM rag_knowledge")->fetchColumn()
                         <div class="col-md-4 mb-3">
                             <label class="form-label">Auto-Sync Interval (Hours)</label>
                             <input type="number" min="1" max="168" name="settings[rag_sync_interval_hours]" class="form-control" value="<?php echo htmlspecialchars(get_setting($pdo, 'rag_sync_interval_hours', '24')); ?>">
-                            <div class="form-text">Sync is verified on-demand when tickets are processed without needing external cronjobs.</div>
+                            <div class="form-text">Verified automatically on demand when tickets arrive, without requiring background cronjobs.</div>
                         </div>
                         <div class="col-md-8 mb-3 d-flex align-items-center">
                             <div class="border rounded p-3 bg-light w-100">
