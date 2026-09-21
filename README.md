@@ -15,6 +15,10 @@
   * Agencies and Agents can enable **Auto-Assign** from their profile settings (`profile.php`).
   * Incoming tickets are automatically assigned upon creation to active agencies/agents with auto-assign enabled.
   * Tickets assigned to an Agency become instantly visible and accessible to all agents under that agency.
+* **AI Assistance, Auto-Responder & RAG Knowledge Grounding**:
+  * Integrated with **Google Gemini API** (Cloud) and **Ollama** (Local open-weight models like Gemma, Llama, Mistral).
+  * Generates 1-click reply suggestions for staff in the ticket view and optionally auto-replies to new incoming tickets asynchronously.
+  * Native **RAG (Retrieval-Augmented Generation)** engine that grounds AI answers in your platform's official documentation, terms of service, and privacy policies using MySQL Full-Text Search without external vector databases.
 * **Granular Ban Management & Cascading Bans**:
   * Individual agents can be banned/unbanned by their agency or an Admin.
   * Admin-level agency bans automatically cascade to ban all agents associated with that agency.
@@ -24,11 +28,10 @@
 * **Custom Layout Branding & Dynamic Colors**:
   * Customize Header and Sidebar background and font colors via color pickers in the Admin panel.
   * Replace default text titles with a custom brand Logo URL (recommended size: `180 x 40 px`, max height `40px`).
-* **Guest & Registered Ticket Creation**: Guests can submit tickets with just their name and email, receiving a unique tracking code and a secure access token via email.
+* **Guest & Registered Ticket Creation**: Guests can submit tickets with just their name and email, receiving a unique tracking code and a secure access token via email with instant redirection to their active ticket.
 * **Web Installation Wizard**: Easy setup via `install.php` with automatic environment checks, database creation, and initial admin account setup.
 * **1-Click Automatic Updates**: Built-in updater that checks GitHub Releases for new code, applies incremental database schema migrations (`migrate.php`), and preserves existing config files.
 * **Two-Factor Authentication (2FA)**: TOTP-based 2FA support (Google Authenticator, Authy) for local accounts and SSO logins.
-* **AI Assistance & Queue System**: Asynchronous background queue integration for AI-powered ticket summary and response assistance (supporting local Ollama and Google Gemini API).
 * **SSO & OAuth Integration**: Single Sign-On integration for MYETV, Google, Microsoft, and Facebook accounts.
 * **Rich Text Editing**: Integrated with **My-WYSIWYG** for rich-text formatting directly on submit and reply textareas.
 * **Automated Translations (i18n)**: JSON-based internationalization featuring an automated translator tool powered by **LibreTranslate**.
@@ -45,7 +48,8 @@
   * `curl`
   * `zip` (required for automatic updates)
   * `json`
-* **Database**: MySQL `^8.0` or MariaDB `^10.3`.
+  * `simplexml` / `libxml` (for RAG XML feed ingestion)
+* **Database**: MySQL `^8.0` or MariaDB `^10.3` (InnoDB with Full-Text search support).
 * **Web Server**: Apache (`mod_rewrite` recommended) or Nginx.
 * **File Permissions**: Write access for the web server user (`www-data` or `apache`) on the root directory for automated updates and configuration generation.
 
@@ -83,6 +87,118 @@ The web installer will automatically:
 3. Import the database schema (`database.sql`).
 4. Create the initial Administrator account.
 5. Generate the `includes/config.php` configuration file.
+
+---
+
+## 🤖 AI Assistant & RAG Knowledge Base
+
+My Service Desk features an advanced AI engine combining generative LLMs with native **Retrieval-Augmented Generation (RAG)** built directly in PHP and MySQL.
+
+### 1. Supported AI Providers
+
+Navigate to **Admin Panel -> Settings** to configure your preferred engine:
+
+* **Local Ollama Models (Self-Hosted / Open-Weight)**:
+  * Works out of the box with models such as **Gemma**, **Llama 3**, or **Mistral**.
+  * Configurable parameters: Server Endpoint URL (e.g. `http://localhost:11434`), Model Name, Context Window (`num_ctx`), Temperature, Top-K, and Top-P.
+* **Google Gemini API (Cloud)**:
+  * Fast cloud-based generation using Google Gemini models (e.g., `gemini-1.5-flash`).
+  * Requires a Gemini API Key.
+
+---
+
+### 2. How the RAG (Retrieval-Augmented Generation) System Works
+
+Instead of relying solely on general model knowledge, RAG grounds AI answers in your platform's official documentation (e.g., Terms of Service, Privacy Policy, knowledge bases, FAQs):
+
+```
++--------------------------+          +------------------------+
+| Remote XML / JSON Feeds  |  ----->  | MySQL `rag_knowledge`  |
+| (Blog / CMS / REST APIs) |  (Sync)  | (Indexed Section Chunks|
++--------------------------+          +------------------------+
+                                                  |
+                                       Full-Text Search Match
+                                                  |
+                                                  v
++--------------------------+          +------------------------+          +--------------------+
+| Incoming Customer Ticket |  ----->  | AI Prompt Grounding    |  ----->  | Accurate, Factual  |
+| (Subject & Message)      |          | (System Context Rules) |          | Grounded AI Reply  |
++--------------------------+          +------------------------+          +--------------------+
+```
+
+1. **Remote Ingestion**: The system fetches content from up to two configured remote URLs.
+2. **Smart HTML Section Chunking**: Long articles (such as lengthy Privacy Policies) are automatically split into discrete chapters based on HTML headings (`<h2>`, `<h3>`). Script/style tags (such as inline JavaScript translation widgets) are stripped out so only clean prose is stored.
+3. **MySQL Full-Text Search**: When an AI reply is generated, the ticket's subject and message are searched against the `rag_knowledge` table using MySQL's `NATURAL LANGUAGE MODE`.
+4. **Context Injection**: The most relevant documentation excerpts are injected directly into the LLM system prompt as the official source of truth.
+
+---
+
+### 3. Supported Feed & API Formats
+
+The RAG crawler supports both XML feeds and JSON/REST API payloads:
+
+#### A. WordPress & CMS REST API Endpoints (JSON)
+You can directly link to REST API endpoints returning posts or pages, for example:
+```text
+https://blog.yourdomain.com/wp-json/wp/v2/posts?slug=privacy-policy
+https://blog.yourdomain.com/wp-json/wp/v2/posts?slug=terms-of-service
+https://blog.yourdomain.com/wp-json/wp/v2/pages?slug=user-guidelines
+```
+The parser automatically extracts `title.rendered` and `content.rendered`, dividing the article into searchable chapters.
+
+#### B. Generic JSON Feeds
+Any JSON endpoint returning a list or single object with standard properties:
+```json
+[
+  {
+    "id": "item-101",
+    "title": "Refund and Billing Policy",
+    "content": "All subscription fees are non-refundable after 14 days of purchase..."
+  },
+  {
+    "id": "item-102",
+    "title": "Account Cancellation",
+    "body": "Users may cancel their account at any time from their profile settings..."
+  }
+]
+```
+Supported keys:
+* **Identifier**: `id`, `guid`, `slug`, `key`.
+* **Title**: `title`, `name`, `subject`, `heading` (or `title.rendered`).
+* **Content**: `content`, `body`, `text`, `description`, `excerpt` (or `content.rendered`).
+
+#### C. XML Feeds (RSS 2.0 / Atom)
+Standard RSS or Atom XML feeds:
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Official Platform Documentation</title>
+    <item>
+      <guid>tos-section-1</guid>
+      <title>Terms of Service - General Usage</title>
+      <description><![CDATA[You agree not to upload abusive or harmful media...]]></description>
+    </item>
+  </channel>
+</rss>
+```
+
+---
+
+### 4. Automatic Cache Sync (No Cron Required)
+
+* **Lazy / On-Demand Sync**: When new tickets arrive, the system checks the timestamp of the last synchronization (`rag_last_sync_time`). If the configured interval (default: 24 hours) has elapsed, it re-fetches and updates the knowledge base in the background.
+* **Manual Force Sync**: Administrators can trigger an immediate re-index at any time by clicking **Force Sync Knowledge Base Now** in **Admin Panel -> Settings**.
+
+---
+
+### 5. Background Queue Worker
+
+If **Auto-Respond on New Ticket Creation** is enabled, incoming tickets are inserted into the `ai_queue` table and processed asynchronously via non-blocking background requests. You can also trigger the worker manually via CLI:
+
+```bash
+php api/process_ai_queue.php
+```
 
 ---
 
@@ -161,15 +277,6 @@ curl -X POST "https://your-domain.com/api/v1/tickets.php" \
 }
 ```
 
-#### Error Response (`HTTP 401 / 403 / 422`)
-
-```json
-{
-  "success": false,
-  "error": "Forbidden. The provided API Key is invalid or has been revoked."
-}
-```
-
 ---
 
 ## 🏢 Agency & Agent Registration Workflow
@@ -227,20 +334,6 @@ If you are sending requests via HTML forms, cURL, or AJAX to submit a ticket aut
    * Downloads the latest release archive from GitHub.
    * Extracts new files while preserving sensitive local files (`includes/config.php`, `.htaccess`, custom assets).
    * Runs incremental database schema migrations automatically (`migrate.php`).
-
----
-
-## 🤖 AI Background Queue Integration
-
-The system features an asynchronous AI queue system (`ai_queue` table) for automated ticket processing (e.g., auto-summarization or agent reply suggestions).
-
-* Configure your AI provider settings (Endpoint, API Key, Model) in **Admin Panel -> Settings**.
-* The queue system is built with MySQL and executes asynchronously without requiring server-level cron jobs.
-* Optionally, you can trigger pending AI queue jobs via CLI or server cron:
-
-```bash
-php api/process_ai_queue.php
-```
 
 ---
 
