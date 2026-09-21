@@ -1,6 +1,6 @@
 <?php
 // includes/rag_helper.php
-// RAG Helper supporting both XML (RSS / Atom) feeds and WordPress REST API JSON endpoints with MySQL Fulltext retrieval
+// RAG Helper supporting XML (RSS / Atom) feeds and generic JSON endpoints with MySQL Fulltext retrieval
 
 require_once __DIR__ . '/config.php';
 
@@ -39,14 +39,14 @@ function sync_rag_feeds(PDO $pdo, bool $force = false): array {
             continue;
         }
 
-        // 1. Try parsing as JSON (e.g. WordPress REST API endpoints)
+        // 1. Try parsing as generic or REST API JSON
         $jsonData = json_decode($rawPayload, true);
-        if (json_last_error() === JSON_ERROR_NONE && (is_array($jsonData))) {
+        if (json_last_error() === JSON_ERROR_NONE && is_array($jsonData)) {
             $totalImported += process_json_feed($pdo, $sourceType, $url, $jsonData);
             continue;
         }
 
-        // 2. Fallback to parsing as XML (RSS 2.0 or Atom)
+        // 2. Fallback to parsing as XML (RSS 2.0 / Atom)
         $totalImported += process_xml_feed($pdo, $sourceType, $url, $rawPayload);
     }
 
@@ -58,7 +58,7 @@ function sync_rag_feeds(PDO $pdo, bool $force = false): array {
 }
 
 /**
- * Parse and store items from WordPress REST API or generic JSON payload
+ * Parse and store items from generic JSON structures or standard REST API endpoints
  *
  * @param PDO $pdo
  * @param string $sourceType
@@ -67,8 +67,8 @@ function sync_rag_feeds(PDO $pdo, bool $force = false): array {
  * @return int Number of processed items
  */
 function process_json_feed(PDO $pdo, string $sourceType, string $url, array $data): int {
-    // If it's a single post object rather than an array of posts, wrap it
-    if (isset($data['id']) || isset($data['title'])) {
+    // If payload is a single object rather than a list of items, normalize to list
+    if (isset($data['id']) || isset($data['title']) || isset($data['name']) || isset($data['content']) || isset($data['body'])) {
         $items = [$data];
     } else {
         $items = $data;
@@ -81,34 +81,60 @@ function process_json_feed(PDO $pdo, string $sourceType, string $url, array $dat
             continue;
         }
 
-        // Extract ID or Slug for GUID
-        $guid = (string)($item['id'] ?? $item['slug'] ?? '');
-        if (empty($guid) && isset($item['guid']['rendered'])) {
+        // 1. Resolve Item Identifier (GUID)
+        $guid = '';
+        if (!empty($item['id'])) {
+            $guid = (string)$item['id'];
+        } elseif (!empty($item['guid']['rendered'])) {
             $guid = (string)$item['guid']['rendered'];
+        } elseif (!empty($item['guid']) && is_string($item['guid'])) {
+            $guid = $item['guid'];
+        } elseif (!empty($item['slug'])) {
+            $guid = (string)$item['slug'];
+        } elseif (!empty($item['key'])) {
+            $guid = (string)$item['key'];
         }
 
-        // Extract Title (WordPress formats this as ['title']['rendered'])
-        $title = '';
-        if (isset($item['title'])) {
-            $title = is_array($item['title']) ? ($item['title']['rendered'] ?? '') : (string)$item['title'];
+        // 2. Resolve Item Title
+        $rawTitle = '';
+        if (isset($item['title']['rendered'])) {
+            $rawTitle = $item['title']['rendered'];
+        } elseif (isset($item['title']) && is_scalar($item['title'])) {
+            $rawTitle = (string)$item['title'];
+        } elseif (isset($item['name']) && is_scalar($item['name'])) {
+            $rawTitle = (string)$item['name'];
+        } elseif (isset($item['subject']) && is_scalar($item['subject'])) {
+            $rawTitle = (string)$item['subject'];
+        } elseif (isset($item['heading']) && is_scalar($item['heading'])) {
+            $rawTitle = (string)$item['heading'];
         }
 
-        // Extract Content (WordPress formats this as ['content']['rendered'])
-        $content = '';
-        if (isset($item['content'])) {
-            $content = is_array($item['content']) ? ($item['content']['rendered'] ?? '') : (string)$item['content'];
-        } elseif (isset($item['excerpt'])) {
-            $content = is_array($item['excerpt']) ? ($item['excerpt']['rendered'] ?? '') : (string)$item['excerpt'];
+        // 3. Resolve Item Content
+        $rawContent = '';
+        if (isset($item['content']['rendered'])) {
+            $rawContent = $item['content']['rendered'];
+        } elseif (isset($item['content']) && is_scalar($item['content'])) {
+            $rawContent = (string)$item['content'];
+        } elseif (isset($item['body']) && is_scalar($item['body'])) {
+            $rawContent = (string)$item['body'];
+        } elseif (isset($item['text']) && is_scalar($item['text'])) {
+            $rawContent = (string)$item['text'];
+        } elseif (isset($item['description']) && is_scalar($item['description'])) {
+            $rawContent = (string)$item['description'];
+        } elseif (isset($item['excerpt']['rendered'])) {
+            $rawContent = $item['excerpt']['rendered'];
+        } elseif (isset($item['excerpt']) && is_scalar($item['excerpt'])) {
+            $rawContent = (string)$item['excerpt'];
         }
 
-        // Fallback guid based on title hash
+        // Fallback GUID if none was explicitly provided
         if (empty($guid)) {
-            $guid = md5($url . $title);
+            $guid = md5($url . $rawTitle . mb_substr($rawContent, 0, 100));
         }
 
-        // Clean HTML markup and decode entities
-        $cleanTitle   = trim(strip_tags(html_entity_decode($title, ENT_QUOTES | ENT_HTML5, 'UTF-8')));
-        $cleanContent = trim(strip_tags(html_entity_decode($content, ENT_QUOTES | ENT_HTML5, 'UTF-8')));
+        // Normalize and clean strings
+        $cleanTitle   = trim(strip_tags(html_entity_decode($rawTitle, ENT_QUOTES | ENT_HTML5, 'UTF-8')));
+        $cleanContent = trim(strip_tags(html_entity_decode($rawContent, ENT_QUOTES | ENT_HTML5, 'UTF-8')));
 
         if (empty($cleanContent) && empty($cleanTitle)) {
             continue;
@@ -130,7 +156,7 @@ function process_json_feed(PDO $pdo, string $sourceType, string $url, array $dat
 }
 
 /**
- * Parse and store items from XML feeds (RSS 2.0 / Atom)
+ * Parse and store items from standard XML feeds (RSS 2.0 / Atom)
  *
  * @param PDO $pdo
  * @param string $sourceType
