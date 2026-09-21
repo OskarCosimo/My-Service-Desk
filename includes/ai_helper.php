@@ -22,32 +22,32 @@ function generate_ai_ticket_reply(PDO $pdo, string $ticketSubject, string $ticke
     $provider           = get_setting($pdo, 'ai_provider', 'gemini');
     $customInstructions = get_setting($pdo, 'ai_custom_instructions', '');
 
-    // Build Context Prompt
+    // Base System Prompt
     $systemPrompt  = "You are a helpful, polite, and professional technical support assistant for a ticket management platform.\n";
-    $systemPrompt .= "Your task is to provide a clear and direct answer to the user ticket.\n";
-
-    if (!empty($customInstructions)) {
-        $systemPrompt .= "Specific Administrator Rules & Instructions to follow:\n" . $customInstructions . "\n\n";
-    }
+    $systemPrompt .= "Your task is to provide a clear, thorough, and direct answer to the customer's questions.\n";
 
     // Retrieve RAG Context if enabled
     if (get_setting($pdo, 'rag_enabled', '0') === '1') {
-        // Trigger lazy feed sync check
         sync_rag_feeds($pdo, false);
 
-        // Retrieve relevant knowledge matching ticket subject and message snippet
         $queryKeywords = $ticketSubject . " " . mb_substr(strip_tags($ticketMessage), 0, 300);
         $ragExcerpts = retrieve_rag_context($pdo, $queryKeywords, 3);
 
         if (!empty($ragExcerpts)) {
-            $systemPrompt .= "OFFICIAL KNOWLEDGE BASE & DOCUMENTATION:\n";
+            $systemPrompt .= "\nOFFICIAL KNOWLEDGE BASE & POLICY DOCUMENTATION (SINGLE SOURCE OF TRUTH):\n";
             foreach ($ragExcerpts as $idx => $doc) {
-                // Shorten content snippet if too long to keep context window optimal
-                $snippet = mb_substr($doc['content'], 0, 1200);
-                $systemPrompt .= "[Document #" . ($idx + 1) . " - " . $doc['title'] . "]:\n" . $snippet . "\n\n";
+                $snippet = mb_substr($doc['content'], 0, 1500);
+                $systemPrompt .= "--- Document #" . ($idx + 1) . ": " . $doc['title'] . " ---\n" . $snippet . "\n\n";
             }
-            $systemPrompt .= "Instruction: Use the above documentation as the primary source of truth when answering questions regarding platform terms, rules, and procedures.\n\n";
+            // Strict anti-evasion directive
+            $systemPrompt .= "MANDATORY INSTRUCTION: You MUST directly and thoroughly answer the user's questions using the facts provided in the official documentation above.\n";
+            $systemPrompt .= "Do NOT evade questions by telling the user to contact generic support emails or open tickets if the factual answer is in the documentation.\n\n";
         }
+    }
+
+    // Administrator Custom Rules
+    if (!empty($customInstructions)) {
+        $systemPrompt .= "Specific Administrator Rules & Instructions to follow:\n" . $customInstructions . "\n\n";
     }
 
     $conversation  = "Ticket Subject: " . $ticketSubject . "\n";
@@ -62,7 +62,7 @@ function generate_ai_ticket_reply(PDO $pdo, string $ticketSubject, string $ticke
         $conversation .= "\n";
     }
 
-    $fullPrompt = $systemPrompt . "Given the above context, write a helpful response to the customer. Output clean HTML formatting (using <p>, <ul>, <li>, <b>, <br> tags). Do not include markdown code blocks or ```html wrappers.\n\n" . $conversation;
+    $fullPrompt = $systemPrompt . "Given the above context and official documentation, write a direct and helpful response in the user's language. Output clean HTML formatting (using <p>, <ul>, <li>, <b>, <br> tags). Do not include markdown code blocks or ```html wrappers.\n\n" . $conversation;
 
     if ($provider === 'gemini') {
         return call_gemini_api($pdo, $fullPrompt);
