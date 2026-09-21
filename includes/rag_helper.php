@@ -1,6 +1,6 @@
 <?php
 // includes/rag_helper.php
-// RAG Helper supporting XML (RSS / Atom) feeds and generic JSON endpoints with MySQL Fulltext retrieval
+// RAG Helper with smart chunking for XML feeds and JSON/REST API endpoints
 
 require_once __DIR__ . '/config.php';
 
@@ -39,7 +39,11 @@ function sync_rag_feeds(PDO $pdo, bool $force = false): array {
             continue;
         }
 
-        // 1. Try parsing as generic or REST API JSON
+        // Clean existing records for this URL to prevent orphaned chunks
+        $stmtClean = $pdo->prepare("DELETE FROM rag_knowledge WHERE feed_url = ?");
+        $stmtClean->execute([$url]);
+
+        // 1. Try parsing as generic JSON or REST API endpoint
         $jsonData = json_decode($rawPayload, true);
         if (json_last_error() === JSON_ERROR_NONE && is_array($jsonData)) {
             $totalImported += process_json_feed($pdo, $sourceType, $url, $jsonData);
@@ -58,7 +62,7 @@ function sync_rag_feeds(PDO $pdo, bool $force = false): array {
 }
 
 /**
- * Parse and store items from generic JSON structures or standard REST API endpoints
+ * Parse and store items from generic JSON or REST API endpoints with section chunking
  *
  * @param PDO $pdo
  * @param string $sourceType
@@ -67,7 +71,6 @@ function sync_rag_feeds(PDO $pdo, bool $force = false): array {
  * @return int Number of processed items
  */
 function process_json_feed(PDO $pdo, string $sourceType, string $url, array $data): int {
-    // If payload is a single object rather than a list of items, normalize to list
     if (isset($data['id']) || isset($data['title']) || isset($data['name']) || isset($data['content']) || isset($data['body'])) {
         $items = [$data];
     } else {
@@ -81,35 +84,31 @@ function process_json_feed(PDO $pdo, string $sourceType, string $url, array $dat
             continue;
         }
 
-        // 1. Resolve Item Identifier (GUID)
-        $guid = '';
+        // 1. Resolve Identifier (GUID)
+        $baseGuid = '';
         if (!empty($item['id'])) {
-            $guid = (string)$item['id'];
+            $baseGuid = (string)$item['id'];
         } elseif (!empty($item['guid']['rendered'])) {
-            $guid = (string)$item['guid']['rendered'];
+            $baseGuid = (string)$item['guid']['rendered'];
         } elseif (!empty($item['guid']) && is_string($item['guid'])) {
-            $guid = $item['guid'];
+            $baseGuid = $item['guid'];
         } elseif (!empty($item['slug'])) {
-            $guid = (string)$item['slug'];
-        } elseif (!empty($item['key'])) {
-            $guid = (string)$item['key'];
+            $baseGuid = (string)$item['slug'];
         }
 
-        // 2. Resolve Item Title
-        $rawTitle = '';
+        // 2. Resolve Title
+        $mainTitle = '';
         if (isset($item['title']['rendered'])) {
-            $rawTitle = $item['title']['rendered'];
+            $mainTitle = $item['title']['rendered'];
         } elseif (isset($item['title']) && is_scalar($item['title'])) {
-            $rawTitle = (string)$item['title'];
+            $mainTitle = (string)$item['title'];
         } elseif (isset($item['name']) && is_scalar($item['name'])) {
-            $rawTitle = (string)$item['name'];
+            $mainTitle = (string)$item['name'];
         } elseif (isset($item['subject']) && is_scalar($item['subject'])) {
-            $rawTitle = (string)$item['subject'];
-        } elseif (isset($item['heading']) && is_scalar($item['heading'])) {
-            $rawTitle = (string)$item['heading'];
+            $mainTitle = (string)$item['subject'];
         }
 
-        // 3. Resolve Item Content
+        // 3. Resolve Content
         $rawContent = '';
         if (isset($item['content']['rendered'])) {
             $rawContent = $item['content']['rendered'];
@@ -121,35 +120,30 @@ function process_json_feed(PDO $pdo, string $sourceType, string $url, array $dat
             $rawContent = (string)$item['text'];
         } elseif (isset($item['description']) && is_scalar($item['description'])) {
             $rawContent = (string)$item['description'];
-        } elseif (isset($item['excerpt']['rendered'])) {
-            $rawContent = $item['excerpt']['rendered'];
-        } elseif (isset($item['excerpt']) && is_scalar($item['excerpt'])) {
-            $rawContent = (string)$item['excerpt'];
         }
 
-        // Fallback GUID if none was explicitly provided
-        if (empty($guid)) {
-            $guid = md5($url . $rawTitle . mb_substr($rawContent, 0, 100));
+        if (empty($baseGuid)) {
+            $baseGuid = md5($url . $mainTitle);
         }
 
-        // Normalize and clean strings
-        $cleanTitle   = trim(strip_tags(html_entity_decode($rawTitle, ENT_QUOTES | ENT_HTML5, 'UTF-8')));
-        $cleanContent = trim(strip_tags(html_entity_decode($rawContent, ENT_QUOTES | ENT_HTML5, 'UTF-8')));
+        $cleanMainTitle = trim(strip_tags(html_entity_decode($mainTitle, ENT_QUOTES | ENT_HTML5, 'UTF-8')));
 
-        if (empty($cleanContent) && empty($cleanTitle)) {
-            continue;
+        // Split long HTML content into searchable section chunks
+        $chunks = split_content_into_chunks($cleanMainTitle, $rawContent);
+
+        foreach ($chunks as $idx => $chunk) {
+            $chunkGuid = $baseGuid . '_sec_' . $idx;
+            $stmt = $pdo->prepare("
+                INSERT INTO rag_knowledge (source_type, feed_url, item_guid, title, content, updated_at)
+                VALUES (?, ?, ?, ?, ?, NOW())
+                ON DUPLICATE KEY UPDATE 
+                    title = VALUES(title),
+                    content = VALUES(content),
+                    updated_at = NOW()
+            ");
+            $stmt->execute([$sourceType, $url, $chunkGuid, $chunk['title'], $chunk['content']]);
+            $imported++;
         }
-
-        $stmt = $pdo->prepare("
-            INSERT INTO rag_knowledge (source_type, feed_url, item_guid, title, content, updated_at)
-            VALUES (?, ?, ?, ?, ?, NOW())
-            ON DUPLICATE KEY UPDATE 
-                title = VALUES(title),
-                content = VALUES(content),
-                updated_at = NOW()
-        ");
-        $stmt->execute([$sourceType, $url, $guid, $cleanTitle, $cleanContent]);
-        $imported++;
     }
 
     return $imported;
@@ -176,35 +170,93 @@ function process_xml_feed(PDO $pdo, string $sourceType, string $url, string $xml
     $imported = 0;
 
     foreach ($items as $item) {
-        $guid  = (string)($item->guid ?? $item->id ?? $item->link ?? md5((string)$item->title));
-        $title = trim((string)$item->title);
+        $baseGuid  = (string)($item->guid ?? $item->id ?? $item->link ?? md5((string)$item->title));
+        $mainTitle = trim((string)$item->title);
 
-        $content = (string)$item->description;
+        $rawContent = (string)$item->description;
         if (isset($item->children('content', true)->encoded)) {
-            $content = (string)$item->children('content', true)->encoded;
+            $rawContent = (string)$item->children('content', true)->encoded;
         } elseif (isset($item->content)) {
-            $content = (string)$item->content;
+            $rawContent = (string)$item->content;
         }
 
-        $cleanContent = trim(strip_tags(html_entity_decode($content, ENT_QUOTES | ENT_HTML5, 'UTF-8')));
+        $cleanMainTitle = trim(strip_tags(html_entity_decode($mainTitle, ENT_QUOTES | ENT_HTML5, 'UTF-8')));
+        $chunks = split_content_into_chunks($cleanMainTitle, $rawContent);
 
-        if (empty($cleanContent) && empty($title)) {
-            continue;
+        foreach ($chunks as $idx => $chunk) {
+            $chunkGuid = $baseGuid . '_sec_' . $idx;
+            $stmt = $pdo->prepare("
+                INSERT INTO rag_knowledge (source_type, feed_url, item_guid, title, content, updated_at)
+                VALUES (?, ?, ?, ?, ?, NOW())
+                ON DUPLICATE KEY UPDATE 
+                    title = VALUES(title),
+                    content = VALUES(content),
+                    updated_at = NOW()
+            ");
+            $stmt->execute([$sourceType, $url, $chunkGuid, $chunk['title'], $chunk['content']]);
+            $imported++;
         }
-
-        $stmt = $pdo->prepare("
-            INSERT INTO rag_knowledge (source_type, feed_url, item_guid, title, content, updated_at)
-            VALUES (?, ?, ?, ?, ?, NOW())
-            ON DUPLICATE KEY UPDATE 
-                title = VALUES(title),
-                content = VALUES(content),
-                updated_at = NOW()
-        ");
-        $stmt->execute([$sourceType, $url, $guid, $title, $cleanContent]);
-        $imported++;
     }
 
     return $imported;
+}
+
+/**
+ * Clean script/style tags and split long HTML articles into distinct section chunks based on headings
+ *
+ * @param string $mainTitle
+ * @param string $htmlContent
+ * @return array Array of chunks with title and clean textual content
+ */
+function split_content_into_chunks(string $mainTitle, string $htmlContent): array {
+    // 1. Remove inline scripts, styles, and noscript tags completely along with their inner code
+    $cleaned = preg_replace('/<(script|style|noscript)\b[^>]*>(.*?)<\/\1>/is', '', $htmlContent);
+
+    // 2. Look for section headings (h1, h2, h3)
+    $pattern = '/<h([1-3])[^>]*>(.*?)<\/h\1>/is';
+    $parts = preg_split($pattern, $cleaned, -1, PREG_SPLIT_DELIM_CAPTURE);
+
+    $chunks = [];
+
+    // If no headings found or too few parts, fallback to paragraph or single chunk
+    if (count($parts) <= 1) {
+        $cleanText = trim(strip_tags(html_entity_decode($cleaned, ENT_QUOTES | ENT_HTML5, 'UTF-8')));
+        if (!empty($cleanText)) {
+            $chunks[] = [
+                'title'   => $mainTitle,
+                'content' => $cleanText
+            ];
+        }
+        return $chunks;
+    }
+
+    // Capture preamble before first heading if present
+    $preamble = trim(strip_tags(html_entity_decode($parts[0], ENT_QUOTES | ENT_HTML5, 'UTF-8')));
+    if (!empty($preamble) && mb_strlen($preamble) > 50) {
+        $chunks[] = [
+            'title'   => $mainTitle . ' - Overview',
+            'content' => $preamble
+        ];
+    }
+
+    // Iterate through captured heading levels, titles, and section contents
+    for ($i = 1; $i < count($parts); $i += 3) {
+        $headingTitle = trim(strip_tags(html_entity_decode($parts[$i + 1] ?? '', ENT_QUOTES | ENT_HTML5, 'UTF-8')));
+        $sectionBody  = trim(strip_tags(html_entity_decode($parts[$i + 2] ?? '', ENT_QUOTES | ENT_HTML5, 'UTF-8')));
+
+        if (empty($sectionBody) && empty($headingTitle)) {
+            continue;
+        }
+
+        $chunkTitle = !empty($headingTitle) ? ($mainTitle . ' - ' . $headingTitle) : $mainTitle;
+
+        $chunks[] = [
+            'title'   => $chunkTitle,
+            'content' => $sectionBody
+        ];
+    }
+
+    return $chunks;
 }
 
 /**
