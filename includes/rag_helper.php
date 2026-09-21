@@ -1,6 +1,6 @@
 <?php
 // includes/rag_helper.php
-// RAG Helper with AI-Driven Multilingual Keyword Translation, Smart Chunking, and MySQL Fulltext Retrieval
+// RAG Helper with Boolean Search, Wildcard Expansion, AI Translation, and Section Chunking
 
 require_once __DIR__ . '/config.php';
 
@@ -84,7 +84,6 @@ function process_json_feed(PDO $pdo, string $sourceType, string $url, array $dat
             continue;
         }
 
-        // 1. Resolve Identifier (GUID)
         $baseGuid = '';
         if (!empty($item['id'])) {
             $baseGuid = (string)$item['id'];
@@ -96,7 +95,6 @@ function process_json_feed(PDO $pdo, string $sourceType, string $url, array $dat
             $baseGuid = (string)$item['slug'];
         }
 
-        // 2. Resolve Title
         $mainTitle = '';
         if (isset($item['title']['rendered'])) {
             $mainTitle = $item['title']['rendered'];
@@ -108,7 +106,6 @@ function process_json_feed(PDO $pdo, string $sourceType, string $url, array $dat
             $mainTitle = (string)$item['subject'];
         }
 
-        // 3. Resolve Content
         $rawContent = '';
         if (isset($item['content']['rendered'])) {
             $rawContent = $item['content']['rendered'];
@@ -128,7 +125,6 @@ function process_json_feed(PDO $pdo, string $sourceType, string $url, array $dat
 
         $cleanMainTitle = trim(strip_tags(html_entity_decode($mainTitle, ENT_QUOTES | ENT_HTML5, 'UTF-8')));
 
-        // Split long HTML content into searchable section chunks based on headings
         $chunks = split_content_into_chunks($cleanMainTitle, $rawContent);
 
         foreach ($chunks as $idx => $chunk) {
@@ -275,7 +271,7 @@ function fetch_feed_content(string $url): ?string {
 }
 
 /**
- * Retrieve relevant excerpts from RAG knowledge base using AI-translated search keywords and MySQL FULLTEXT search
+ * Retrieve relevant excerpts from RAG knowledge base using Boolean Mode (bypassing 50% threshold)
  *
  * @param PDO $pdo
  * @param string $searchQuery
@@ -283,36 +279,69 @@ function fetch_feed_content(string $url): ?string {
  * @return array
  */
 function retrieve_rag_context(PDO $pdo, string $searchQuery, int $limit = 3): array {
-    $cleanQuery = preg_replace('/[+\-><()~*\"@]+/', ' ', $searchQuery);
-    $cleanQuery = trim($cleanQuery);
-
+    $cleanQuery = trim(preg_replace('/[+\-><()~*\"@]+/', ' ', $searchQuery));
     if (empty($cleanQuery)) {
         return [];
     }
 
-    // Call AI (1st Call) to extract English technical search keywords from the ticket
+    // 1. Ask active AI (Ollama / Gemini) to extract English technical search keywords
     $englishKeywords = extract_english_keywords_via_ai($pdo, $cleanQuery);
-    
-    // Combine original query with the AI-translated English keywords
-    $expandedQuery = trim($cleanQuery . ' ' . $englishKeywords);
 
+    // 2. Build terms array with wildcard support (e.g. registra* matches registration, account* matches account)
+    $rawTerms = preg_split('/\s+/', $cleanQuery . ' ' . $englishKeywords);
+    $booleanTerms = [];
+
+    foreach ($rawTerms as $term) {
+        $term = trim(strtolower($term));
+        // Only keep words of 3+ characters to avoid SQL noise
+        if (mb_strlen($term) >= 3) {
+            $booleanTerms[] = $term . '*';
+        }
+    }
+
+    if (empty($booleanTerms)) {
+        return [];
+    }
+
+    // Use up to 10 most relevant search terms for boolean search
+    $booleanQuery = implode(' ', array_slice(array_unique($booleanTerms), 0, 10));
+
+    // Search using BOOLEAN MODE (bypasses the 50% frequency rule completely)
     $stmt = $pdo->prepare("
-        SELECT title, content, MATCH(title, content) AGAINST (? IN NATURAL LANGUAGE MODE) AS relevance
+        SELECT title, content, MATCH(title, content) AGAINST (? IN BOOLEAN MODE) AS relevance
         FROM rag_knowledge
-        WHERE MATCH(title, content) AGAINST (? IN NATURAL LANGUAGE MODE)
+        WHERE MATCH(title, content) AGAINST (? IN BOOLEAN MODE)
         ORDER BY relevance DESC
         LIMIT ?
     ");
-    $stmt->bindValue(1, $expandedQuery, PDO::PARAM_STR);
-    $stmt->bindValue(2, $expandedQuery, PDO::PARAM_STR);
+    $stmt->bindValue(1, $booleanQuery, PDO::PARAM_STR);
+    $stmt->bindValue(2, $booleanQuery, PDO::PARAM_STR);
     $stmt->bindValue(3, $limit, PDO::PARAM_INT);
     $stmt->execute();
 
-    return $stmt->fetchAll();
+    $results = $stmt->fetchAll();
+
+    // Fallback: if boolean mode matched 0 rows, try NATURAL LANGUAGE MODE
+    if (empty($results)) {
+        $stmtNatural = $pdo->prepare("
+            SELECT title, content, MATCH(title, content) AGAINST (? IN NATURAL LANGUAGE MODE) AS relevance
+            FROM rag_knowledge
+            WHERE MATCH(title, content) AGAINST (? IN NATURAL LANGUAGE MODE)
+            ORDER BY relevance DESC
+            LIMIT ?
+        ");
+        $stmtNatural->bindValue(1, $cleanQuery . ' ' . $englishKeywords, PDO::PARAM_STR);
+        $stmtNatural->bindValue(2, $cleanQuery . ' ' . $englishKeywords, PDO::PARAM_STR);
+        $stmtNatural->bindValue(3, $limit, PDO::PARAM_INT);
+        $stmtNatural->execute();
+        $results = $stmtNatural->fetchAll();
+    }
+
+    return $results;
 }
 
 /**
- * First AI Call: Fast keyword translation via active LLM (Ollama or Gemini) with low token budget (max 20 tokens)
+ * Fast keyword translation via active LLM (Ollama or Gemini) with low token budget (max 20 tokens)
  *
  * @param PDO $pdo
  * @param string $text
@@ -325,7 +354,7 @@ function extract_english_keywords_via_ai(PDO $pdo, string $text): string {
 
     $provider  = get_setting($pdo, 'ai_provider', 'gemini');
     $shortText = mb_substr(strip_tags($text), 0, 300);
-    $prompt    = "Translate this customer support ticket into 5-8 English search keywords for documentation matching:\n\"" . $shortText . "\"\nRespond ONLY with space-separated English keywords:";
+    $prompt    = "Extract 5 to 8 English search keywords from this customer support ticket to find policy/terms documentation:\n\"" . $shortText . "\"\nRespond ONLY with space-separated English keywords without punctuation or conversation:";
 
     if ($provider === 'ollama') {
         $ollamaUrl = rtrim(get_setting($pdo, 'ai_ollama_url', 'http://localhost:11434'), '/');
@@ -344,7 +373,7 @@ function extract_english_keywords_via_ai(PDO $pdo, string $text): string {
                 'temperature' => 0.1
             ]
         ]));
-        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 12);
         $res = curl_exec($ch);
         curl_close($ch);
 
