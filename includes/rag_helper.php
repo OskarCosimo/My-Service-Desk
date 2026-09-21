@@ -1,6 +1,6 @@
 <?php
 // includes/rag_helper.php
-// RAG Helper with Boolean Search, Wildcard Expansion, AI Translation, and Section Chunking
+// RAG Helper with Optional AI Multilingual Translation, Boolean Search, and Smart Chunking
 
 require_once __DIR__ . '/config.php';
 
@@ -284,16 +284,18 @@ function retrieve_rag_context(PDO $pdo, string $searchQuery, int $limit = 3): ar
         return [];
     }
 
-    // 1. Ask active AI (Ollama / Gemini) to extract English technical search keywords
-    $englishKeywords = extract_english_keywords_via_ai($pdo, $cleanQuery);
+    $englishKeywords = '';
+    // Check if query translation to English is enabled in settings (default: enabled)
+    if (get_setting($pdo, 'rag_translate_query', '1') === '1') {
+        $englishKeywords = extract_english_keywords_via_ai($pdo, $cleanQuery);
+    }
 
-    // 2. Build terms array with wildcard support (e.g. registra* matches registration, account* matches account)
-    $rawTerms = preg_split('/\s+/', $cleanQuery . ' ' . $englishKeywords);
+    // Build terms array with wildcard support (e.g. registra* matches registration, account* matches account)
+    $rawTerms = preg_split('/\s+/', trim($cleanQuery . ' ' . $englishKeywords));
     $booleanTerms = [];
 
     foreach ($rawTerms as $term) {
         $term = trim(strtolower($term));
-        // Only keep words of 3+ characters to avoid SQL noise
         if (mb_strlen($term) >= 3) {
             $booleanTerms[] = $term . '*';
         }
@@ -323,6 +325,7 @@ function retrieve_rag_context(PDO $pdo, string $searchQuery, int $limit = 3): ar
 
     // Fallback: if boolean mode matched 0 rows, try NATURAL LANGUAGE MODE
     if (empty($results)) {
+        $searchTerms = trim($cleanQuery . ' ' . $englishKeywords);
         $stmtNatural = $pdo->prepare("
             SELECT title, content, MATCH(title, content) AGAINST (? IN NATURAL LANGUAGE MODE) AS relevance
             FROM rag_knowledge
@@ -330,8 +333,8 @@ function retrieve_rag_context(PDO $pdo, string $searchQuery, int $limit = 3): ar
             ORDER BY relevance DESC
             LIMIT ?
         ");
-        $stmtNatural->bindValue(1, $cleanQuery . ' ' . $englishKeywords, PDO::PARAM_STR);
-        $stmtNatural->bindValue(2, $cleanQuery . ' ' . $englishKeywords, PDO::PARAM_STR);
+        $stmtNatural->bindValue(1, $searchTerms, PDO::PARAM_STR);
+        $stmtNatural->bindValue(2, $searchTerms, PDO::PARAM_STR);
         $stmtNatural->bindValue(3, $limit, PDO::PARAM_INT);
         $stmtNatural->execute();
         $results = $stmtNatural->fetchAll();
