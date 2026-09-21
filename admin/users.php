@@ -1,6 +1,6 @@
 <?php
 // admin/users.php
-// User Management Page with Account Approval System, Compact Table View, Settings Modal, and Ban Control
+// User Management Page with Account Approval System, API Key Revocation, Ban Control, and Modal Settings
 session_start();
 require_once __DIR__ . '/../includes/config.php';
 
@@ -28,6 +28,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     }
 }
 
+// Process API Key Toggle (Revoke / Activate)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'toggle_api_key') {
+    $targetUserId = (int)($_POST['user_id'] ?? 0);
+
+    if ($targetUserId > 0) {
+        try {
+            $stmt = $pdo->prepare("
+                UPDATE api_keys 
+                SET is_active = CASE WHEN is_active = 1 THEN 0 ELSE 1 END,
+                    revoked_at = CASE WHEN is_active = 1 THEN NOW() ELSE NULL END
+                WHERE user_id = ?
+            ");
+            $stmt->execute([$targetUserId]);
+            $message = "User API key status updated successfully.";
+        } catch (PDOException $e) {
+            $error = "Database Error: " . $e->getMessage();
+        }
+    }
+}
+
 // Process Ban / Unban Request
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'toggle_ban') {
     $targetUserId = (int)($_POST['user_id'] ?? 0);
@@ -38,7 +58,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $error = "You cannot ban your own active Admin account.";
     } else {
         try {
-            // Toggle ban status
             $stmt = $pdo->prepare("UPDATE users SET is_banned = CASE WHEN is_banned = 1 THEN 0 ELSE 1 END WHERE id = ?");
             $stmt->execute([$targetUserId]);
             $message = "User ban status updated successfully.";
@@ -52,7 +71,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'update_user_settings') {
     $targetUserId = (int)($_POST['user_id'] ?? 0);
     $newRole      = trim($_POST['role'] ?? '');
-    // If new role is 'agency' or 'admin', agency_id must be NULL
     $agencyId     = (!empty($_POST['agency_id']) && !in_array($newRole, ['agency', 'admin'], true)) ? (int)$_POST['agency_id'] : null;
     $autoAssign   = isset($_POST['auto_assign_tickets']) ? 1 : 0;
     $allowedRoles = ['user', 'agent', 'agency', 'admin'];
@@ -63,7 +81,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $error = "You cannot demote your own active Admin account.";
     } else {
         try {
-            // Update role, agency assignment, and auto-assign setting
             $stmt = $pdo->prepare("UPDATE users SET role = ?, agency_id = ?, auto_assign_tickets = ? WHERE id = ?");
             $stmt->execute([$newRole, $agencyId, $autoAssign, $targetUserId]);
             $message = "User settings updated successfully.";
@@ -77,12 +94,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 $stmtAgencies = $pdo->query("SELECT id, username FROM users WHERE role = 'agency' ORDER BY username ASC");
 $agenciesList = $stmtAgencies->fetchAll();
 
-// Fetch all users with their associated agency name, ban status, and approval status
+// Fetch users with their agency name, ban status, and API key details
 $stmtUsers = $pdo->query("
     SELECT u.id, u.username, u.email, u.role, u.agency_id, u.auto_assign_tickets, u.is_banned, COALESCE(u.is_approved, 1) AS is_approved, u.auth_provider, u.two_factor_enabled, u.created_at,
-           ag.username AS agency_name
+           ag.username AS agency_name,
+           ak.id AS api_key_id, ak.api_key, ak.is_active AS api_key_active
     FROM users u
     LEFT JOIN users ag ON u.agency_id = ag.id
+    LEFT JOIN api_keys ak ON u.id = ak.user_id
     ORDER BY u.is_approved ASC, u.id DESC
 ");
 $users = $stmtUsers->fetchAll();
@@ -114,6 +133,7 @@ require_once __DIR__ . '/../includes/sidebar.php';
                                 <th>Email</th>
                                 <th>Role</th>
                                 <th>Approval Status</th>
+                                <th>API Key</th>
                                 <th>Assigned Agency</th>
                                 <th>Auto-Assign</th>
                                 <th>Registered At</th>
@@ -149,6 +169,17 @@ require_once __DIR__ . '/../includes/sidebar.php';
                                         <?php endif; ?>
                                     </td>
                                     <td>
+                                        <?php if (!empty($u['api_key_id'])): ?>
+                                            <?php if (!empty($u['api_key_active'])): ?>
+                                                <span class="badge bg-success" title="<?php echo htmlspecialchars($u['api_key']); ?>"><i class="fa-solid fa-key me-1"></i> Active</span>
+                                            <?php else: ?>
+                                                <span class="badge bg-danger"><i class="fa-solid fa-ban me-1"></i> Revoked</span>
+                                            <?php endif; ?>
+                                        <?php else: ?>
+                                            <span class="text-muted small">None</span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td>
                                         <?php if ($u['role'] === 'agency'): ?>
                                             <span class="text-muted small"><em>N/A (Agency)</em></span>
                                         <?php elseif ($u['agency_name']): ?>
@@ -167,7 +198,18 @@ require_once __DIR__ . '/../includes/sidebar.php';
                                     <td><small><?php echo htmlspecialchars(date('Y-m-d', strtotime($u['created_at']))); ?></small></td>
                                     <td class="text-end">
                                         <div class="btn-group btn-group-sm" role="group">
-                                            <!-- Approve / Revoke Button -->
+                                            <!-- Revoke / Restore API Key (if key exists) -->
+                                            <?php if (!empty($u['api_key_id'])): ?>
+                                                <form method="POST" action="users.php" class="d-inline m-0">
+                                                    <input type="hidden" name="action" value="toggle_api_key">
+                                                    <input type="hidden" name="user_id" value="<?php echo (int)$u['id']; ?>">
+                                                    <button type="submit" class="btn btn-sm <?php echo !empty($u['api_key_active']) ? 'btn-outline-danger' : 'btn-outline-success'; ?>" title="<?php echo !empty($u['api_key_active']) ? 'Revoke API Key' : 'Restore API Key'; ?>">
+                                                        <i class="fa-solid <?php echo !empty($u['api_key_active']) ? 'fa-key' : 'fa-key'; ?> text-decoration-line-through"></i>
+                                                    </button>
+                                                </form>
+                                            <?php endif; ?>
+
+                                            <!-- Approve / Revoke Approval Button -->
                                             <form method="POST" action="users.php" class="d-inline m-0">
                                                 <input type="hidden" name="action" value="toggle_approval">
                                                 <input type="hidden" name="user_id" value="<?php echo (int)$u['id']; ?>">
@@ -284,7 +326,6 @@ require_once __DIR__ . '/../includes/sidebar.php';
             }
         });
 
-        // Dynamic toggle for Agency Selection container inside Modal
         $('.role-select').on('change', function() {
             const userId = $(this).data('user-id');
             const selectedRole = $(this).val();
