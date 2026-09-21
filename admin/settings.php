@@ -351,10 +351,18 @@ $ragItemCount = $pdo->query("SELECT COUNT(*) FROM rag_knowledge")->fetchColumn()
                     </button>
                 </div>
                 <div class="card-body">
-                    <div class="mb-3 form-check">
-                        <input type="hidden" name="settings[rag_enabled]" value="0">
-                        <input type="checkbox" name="settings[rag_enabled]" value="1" class="form-check-input" id="enableRag" <?php echo get_setting($pdo, 'rag_enabled') === '1' ? 'checked' : ''; ?>>
-                        <label class="form-check-label fw-bold" for="enableRag">Enable RAG Document Retrieval for AI</label>
+                    <div class="row mb-3">
+                        <div class="col-md-6 form-check">
+                            <input type="hidden" name="settings[rag_enabled]" value="0">
+                            <input type="checkbox" name="settings[rag_enabled]" value="1" class="form-check-input" id="enableRag" <?php echo get_setting($pdo, 'rag_enabled') === '1' ? 'checked' : ''; ?>>
+                            <label class="form-check-label fw-bold" for="enableRag">Enable RAG Document Retrieval for AI</label>
+                        </div>
+                        <div class="col-md-6 form-check">
+                            <input type="hidden" name="settings[rag_translate_query]" value="0">
+                            <input type="checkbox" name="settings[rag_translate_query]" value="1" class="form-check-input" id="ragTranslateQuery" <?php echo get_setting($pdo, 'rag_translate_query', '1') === '1' ? 'checked' : ''; ?>>
+                            <label class="form-check-label fw-bold" for="ragTranslateQuery">Translate ticket query to English before searching</label>
+                            <div class="form-text text-muted small">Recommended if knowledge feeds are written in English and tickets arrive in other languages.</div>
+                        </div>
                     </div>
 
                     <div class="row">
