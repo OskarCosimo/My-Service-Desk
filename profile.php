@@ -1,6 +1,6 @@
 <?php
 // profile.php
-// User Profile Settings Page with QR Code 2FA Activation & Ticket Auto-Assignment Settings
+// User Profile Settings Page with QR Code 2FA Activation, Auto-Assignment, and Agent API Key Management
 session_start();
 require_once __DIR__ . '/includes/config.php';
 require_once __DIR__ . '/includes/totp_helper.php';
@@ -10,7 +10,7 @@ if (!isset($_SESSION['user_id'])) {
     exit;
 }
 
-$userId = $_SESSION['user_id'];
+$userId = (int)$_SESSION['user_id'];
 $success = '';
 $error = '';
 
@@ -30,6 +30,14 @@ if (empty($_SESSION['temp_2fa_secret'])) {
 $tempSecret = $_SESSION['temp_2fa_secret'];
 $siteTitle  = get_setting($pdo, 'site_title', 'Support Tickets');
 $qrUri      = get_totp_qr_url($user['email'], $siteTitle, $tempSecret);
+
+// Fetch active or revoked API Key for agent
+$userApiKey = null;
+if (in_array($user['role'], ['agent', 'agency', 'admin'], true)) {
+    $stmtKey = $pdo->prepare("SELECT * FROM api_keys WHERE user_id = ? LIMIT 1");
+    $stmtKey->execute([$userId]);
+    $userApiKey = $stmtKey->fetch();
+}
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
@@ -62,6 +70,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $success = __('preferences_updated', 'Ticket management preferences updated successfully.');
         } else {
             $error = __('preferences_update_failed', 'Failed to update auto-assignment setting.');
+        }
+    }
+
+    // Generate or Regenerate API Key (Agent / Agency / Admin)
+    if ($action === 'generate_api_key' && in_array($user['role'], ['admin', 'agency', 'agent'], true)) {
+        $newApiKey = 'tmk_' . bin2hex(random_bytes(24));
+        $keyName = trim($_POST['key_name'] ?? 'Agent API Key');
+
+        if ($userApiKey) {
+            // Re-generate existing user key
+            $stmtKeyUpdate = $pdo->prepare("UPDATE api_keys SET api_key = ?, key_name = ?, is_active = 1, revoked_at = NULL, created_at = NOW() WHERE user_id = ?");
+            $stmtKeyUpdate->execute([$newApiKey, $keyName, $userId]);
+        } else {
+            // Insert single key
+            $stmtKeyInsert = $pdo->prepare("INSERT INTO api_keys (user_id, key_name, api_key, is_active) VALUES (?, ?, ?, 1)");
+            $stmtKeyInsert->execute([$userId, $keyName, $newApiKey]);
+        }
+
+        $stmtKey = $pdo->prepare("SELECT * FROM api_keys WHERE user_id = ? LIMIT 1");
+        $stmtKey->execute([$userId]);
+        $userApiKey = $stmtKey->fetch();
+
+        $success = __('api_key_generated', 'API Key generated successfully. Make sure to keep it secure.');
+    }
+
+    // Revoke API Key (Self-service)
+    if ($action === 'revoke_api_key' && in_array($user['role'], ['admin', 'agency', 'agent'], true)) {
+        if ($userApiKey) {
+            $stmtRevoke = $pdo->prepare("UPDATE api_keys SET is_active = 0, revoked_at = NOW() WHERE user_id = ?");
+            $stmtRevoke->execute([$userId]);
+
+            $stmtKey = $pdo->prepare("SELECT * FROM api_keys WHERE user_id = ? LIMIT 1");
+            $stmtKey->execute([$userId]);
+            $userApiKey = $stmtKey->fetch();
+
+            $success = __('api_key_revoked', 'Your API Key has been revoked.');
         }
     }
 
@@ -158,6 +202,68 @@ require_once __DIR__ . '/includes/sidebar.php';
                 </form>
             </div>
         </div>
+
+        <!-- REST API Key Management (Agencies & Agents) -->
+        <?php if (in_array($user['role'], ['admin', 'agency', 'agent'], true)): ?>
+            <div class="card mb-4 shadow-sm">
+                <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+                    <span><i class="fa-solid fa-key me-1"></i> <?php echo __('rest_api_key', 'REST API Key'); ?></span>
+                    <?php if ($userApiKey && !empty($userApiKey['is_active'])): ?>
+                        <span class="badge bg-success"><?php echo __('active', 'Active'); ?></span>
+                    <?php elseif ($userApiKey): ?>
+                        <span class="badge bg-danger"><?php echo __('revoked', 'Revoked'); ?></span>
+                    <?php else: ?>
+                        <span class="badge bg-secondary"><?php echo __('not_generated', 'Not Generated'); ?></span>
+                    <?php endif; ?>
+                </div>
+                <div class="card-body">
+                    <p class="text-muted small mb-3">
+                        <?php echo __('api_key_description', 'You can use this API Key to create tickets via the REST API endpoint (<code>/api/v1/tickets.php</code>). Each user is allowed a single active API key.'); ?>
+                    </p>
+
+                    <?php if ($userApiKey && !empty($userApiKey['is_active'])): ?>
+                        <div class="mb-3">
+                            <label class="form-label fw-bold"><?php echo __('your_api_key', 'Your API Key:'); ?></label>
+                            <div class="input-group">
+                                <input type="text" id="api_key_field" class="form-control font-monospace bg-light" value="<?php echo htmlspecialchars($userApiKey['api_key']); ?>" readonly>
+                                <button class="btn btn-outline-secondary" type="button" onclick="navigator.clipboard.writeText(document.getElementById('api_key_field').value); alert('API Key copied to clipboard!');">
+                                    <i class="fa-solid fa-copy"></i>
+                                </button>
+                            </div>
+                            <small class="text-muted"><?php echo __('created_at', 'Created on:'); ?> <?php echo htmlspecialchars($userApiKey['created_at']); ?></small>
+                        </div>
+
+                        <div class="d-flex gap-2">
+                            <form method="POST" action="profile.php" onsubmit="return confirm('Regenerating will invalidate your current API Key. Continue?');">
+                                <input type="hidden" name="action" value="generate_api_key">
+                                <input type="hidden" name="key_name" value="<?php echo htmlspecialchars($userApiKey['key_name']); ?>">
+                                <button type="submit" class="btn btn-warning btn-sm">
+                                    <i class="fa-solid fa-rotate me-1"></i> <?php echo __('regenerate_key', 'Regenerate Key'); ?>
+                                </button>
+                            </form>
+
+                            <form method="POST" action="profile.php" onsubmit="return confirm('Are you sure you want to revoke this API Key?');">
+                                <input type="hidden" name="action" value="revoke_api_key">
+                                <button type="submit" class="btn btn-danger btn-sm">
+                                    <i class="fa-solid fa-ban me-1"></i> <?php echo __('revoke_key', 'Revoke Key'); ?>
+                                </button>
+                            </form>
+                        </div>
+                    <?php else: ?>
+                        <form method="POST" action="profile.php">
+                            <input type="hidden" name="action" value="generate_api_key">
+                            <div class="mb-3">
+                                <label class="form-label"><?php echo __('key_description_label', 'Key Description / Name'); ?></label>
+                                <input type="text" name="key_name" class="form-control" value="Agent API Key" required>
+                            </div>
+                            <button type="submit" class="btn btn-primary btn-sm">
+                                <i class="fa-solid fa-key me-1"></i> <?php echo __('generate_new_api_key', 'Generate New API Key'); ?>
+                            </button>
+                        </form>
+                    <?php endif; ?>
+                </div>
+            </div>
+        <?php endif; ?>
 
         <!-- Ticket Auto-Assignment Card (For Agencies and Agents) -->
         <?php if (in_array($user['role'], ['admin', 'agency', 'agent'], true)): ?>
