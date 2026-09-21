@@ -1,6 +1,6 @@
 <?php
 // includes/header.php
-// Header with Bootstrap 5.3 Theme Switcher, Branding logo, Custom Colors, Language selector, and Header Code Injection
+// Header with Bootstrap 5.3 Theme Switcher, Branding logo, Custom Colors, Language selector, Header Code Injection, and DataTables for Notifications
 require_once __DIR__ . '/config.php';
 $siteTitle = get_setting($pdo, 'site_title', 'My Tickets Manager');
 $availableLangs = get_available_languages();
@@ -35,6 +35,14 @@ $sidebarText = get_setting($pdo, 'theme_sidebar_text', '#f8f9fa');
 
     <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.2/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css" rel="stylesheet">
+    
+    <!-- DataTables Bootstrap 5 CSS -->
+    <link href="https://cdn.datatables.net/1.13.8/css/dataTables.bootstrap5.min.css" rel="stylesheet">
+
+    <!-- jQuery and DataTables JS -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js"></script>
+    <script src="https://cdn.datatables.net/1.13.8/js/jquery.dataTables.min.js"></script>
+    <script src="https://cdn.datatables.net/1.13.8/js/dataTables.bootstrap5.min.js"></script>
     
     <!-- Cloudflare Turnstile API Script -->
     <?php if (get_setting($pdo, 'turnstile_enabled', '0') === '1'): ?>
@@ -119,6 +127,17 @@ $sidebarText = get_setting($pdo, 'theme_sidebar_text', '#f8f9fa');
             body.sidebar-expanded #sidebar-wrapper .sidebar-header {
                 display: inline-block !important;
             }
+        }
+
+        /* DataTables Modal Styling Adjustments */
+        #notificationsTable_wrapper .dataTables_paginate .pagination {
+            margin-bottom: 0;
+            font-size: 0.85rem;
+        }
+        #notificationsTable_wrapper .dataTables_info,
+        #notificationsTable_wrapper .dataTables_length,
+        #notificationsTable_wrapper .dataTables_filter {
+            font-size: 0.85rem;
         }
     </style>
     
@@ -208,15 +227,27 @@ $sidebarText = get_setting($pdo, 'theme_sidebar_text', '#f8f9fa');
 
     <!-- Internal Notifications Modal -->
     <div class="modal fade" id="notificationsModal" tabindex="-1" aria-hidden="true">
-        <div class="modal-dialog modal-dialog-scrollable">
+        <div class="modal-dialog modal-dialog-scrollable modal-lg">
             <div class="modal-content text-start">
                 <div class="modal-header bg-dark text-white">
                     <h5 class="modal-title"><i class="fa-solid fa-bell me-2 text-warning"></i> <?php echo __('notifications', 'Notifications'); ?></h5>
                     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
-                <div class="modal-body p-0">
-                    <div id="notifListGroup" class="list-group list-group-flush">
-                        <div class="text-center text-muted py-3"><?php echo __('loading_notifications', 'Loading notifications...'); ?></div>
+                <div class="modal-body p-3">
+                    <div class="table-responsive">
+                        <table id="notificationsTable" class="table table-striped table-hover align-middle w-100">
+                            <thead>
+                                <tr>
+                                    <th style="width: 10%;"><?php echo __('status', 'Status'); ?></th>
+                                    <th style="width: 25%;"><?php echo __('title', 'Title'); ?></th>
+                                    <th style="width: 40%;"><?php echo __('message', 'Message'); ?></th>
+                                    <th style="width: 15%;"><?php echo __('date', 'Date'); ?></th>
+                                    <th style="width: 10%;" class="text-center"><?php echo __('action', 'Action'); ?></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                            </tbody>
+                        </table>
                     </div>
                 </div>
                 <div class="modal-footer py-2 justify-content-between">
@@ -230,9 +261,36 @@ $sidebarText = get_setting($pdo, 'theme_sidebar_text', '#f8f9fa');
     <script>
     document.addEventListener('DOMContentLoaded', function() {
         const notifBadge = document.getElementById('notifBadge');
-        const notifList = document.getElementById('notifListGroup');
         const btnMarkRead = document.getElementById('btnMarkAllRead');
-        const emptyMsg = "<?php echo addslashes(__('no_notifications', 'No notifications received yet.')); ?>";
+        const notifModalEl = document.getElementById('notificationsModal');
+        let notifDataTable = null;
+
+        // Initialize DataTables on the notifications table
+        if ($('#notificationsTable').length) {
+            notifDataTable = $('#notificationsTable').DataTable({
+                data: [],
+                columns: [
+                    { data: 'status' },
+                    { data: 'title' },
+                    { data: 'message' },
+                    { data: 'created_at' },
+                    { data: 'action', orderable: false, searchable: false, className: 'text-center' }
+                ],
+                order: [[3, 'desc']],
+                pageLength: 5,
+                lengthMenu: [5, 10, 25, 50],
+                autoWidth: false
+            });
+        }
+
+        // Adjust DataTables column widths when the modal is fully shown
+        if (notifModalEl) {
+            notifModalEl.addEventListener('shown.bs.modal', function() {
+                if (notifDataTable) {
+                    notifDataTable.columns.adjust().draw();
+                }
+            });
+        }
 
         function fetchNotifications() {
             fetch('/api/notifications.php?action=get')
@@ -248,29 +306,28 @@ $sidebarText = get_setting($pdo, 'theme_sidebar_text', '#f8f9fa');
                         notifBadge.classList.add('d-none');
                     }
 
-                    // Render List
-                    if (!notifList) return;
-                    if (data.items.length === 0) {
-                        notifList.innerHTML = `<div class="text-center text-muted py-3">${emptyMsg}</div>`;
-                        return;
+                    // Populate DataTables rows
+                    if (notifDataTable) {
+                        const formattedRows = data.items.map(item => {
+                            const isUnread = item.is_read == '0';
+                            const statusBadge = isUnread 
+                                ? '<span class="badge bg-danger"><?php echo addslashes(__('unread', 'Unread')); ?></span>' 
+                                : '<span class="badge bg-secondary"><?php echo addslashes(__('read', 'Read')); ?></span>';
+
+                            const trackUrl = `/track.php?code=${encodeURIComponent(item.tracking_code || '')}&token=${encodeURIComponent(item.access_token || '')}`;
+                            const actionBtn = `<a href="${trackUrl}" class="btn btn-sm btn-outline-primary" title="<?php echo addslashes(__('view', 'View')); ?>"><i class="fa-solid fa-arrow-up-right-from-square"></i></a>`;
+
+                            return {
+                                status: statusBadge,
+                                title: `<span class="${isUnread ? 'fw-bold' : ''}">${item.title}</span>`,
+                                message: `<small class="text-body-secondary">${item.message}</small>`,
+                                created_at: `<small>${item.created_at}</small>`,
+                                action: actionBtn
+                            };
+                        });
+
+                        notifDataTable.clear().rows.add(formattedRows).draw(false);
                     }
-
-                    let html = '';
-                    data.items.forEach(item => {
-                        const bgClass = item.is_read == '0' ? 'bg-light fw-bold' : '';
-                        const trackUrl = `/track.php?code=${encodeURIComponent(item.tracking_code || '')}&token=${encodeURIComponent(item.access_token || '')}`;
-
-                        html += `
-                            <a href="${trackUrl}" class="list-group-item list-group-item-action ${bgClass} py-2">
-                                <div class="d-flex w-100 justify-content-between align-items-center">
-                                    <small class="text-primary">${item.title}</small>
-                                    <small class="text-muted" style="font-size: 0.75rem;">${item.created_at}</small>
-                                </div>
-                                <div class="small text-dark mt-1">${item.message}</div>
-                            </a>
-                        `;
-                    });
-                    notifList.innerHTML = html;
                 }).catch(() => {});
         }
 
