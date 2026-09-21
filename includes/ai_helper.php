@@ -40,13 +40,13 @@ function generate_ai_ticket_reply(PDO $pdo, string $ticketSubject, string $ticke
         $ragExcerpts = retrieve_rag_context($pdo, $queryKeywords, 3);
 
         if (!empty($ragExcerpts)) {
-            $systemPrompt .= "OFFICIAL POLICIES & KNOWLEDGE BASE DOCUMENTATION (MYETV Terms of Service & Privacy):\n";
+            $systemPrompt .= "OFFICIAL KNOWLEDGE BASE & DOCUMENTATION:\n";
             foreach ($ragExcerpts as $idx => $doc) {
                 // Shorten content snippet if too long to keep context window optimal
                 $snippet = mb_substr($doc['content'], 0, 1200);
                 $systemPrompt .= "[Document #" . ($idx + 1) . " - " . $doc['title'] . "]:\n" . $snippet . "\n\n";
             }
-            $systemPrompt .= "Instruction: Use the above documentation as the single source of truth when answering questions regarding platform terms, rules, and privacy.\n\n";
+            $systemPrompt .= "Instruction: Use the above documentation as the primary source of truth when answering questions regarding platform terms, rules, and procedures.\n\n";
         }
     }
 
