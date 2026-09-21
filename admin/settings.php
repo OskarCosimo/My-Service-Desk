@@ -16,7 +16,7 @@ $success = '';
 // Handle manual RAG Feed Sync request
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action_sync_rag'])) {
     $syncResult = sync_rag_feeds($pdo, true);
-    $success = 'RAG Knowledge feeds synchronized successfully! Processed ' . ($syncResult['total_items'] ?? 0) . ' items.';
+    $success = 'Knowledge Base feeds synchronized successfully! Processed ' . ($syncResult['total_items'] ?? 0) . ' items.';
 } elseif ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['settings'])) {
     foreach ($_POST['settings'] as $key => $value) {
         $stmt = $pdo->prepare("INSERT INTO settings (setting_key, setting_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)");
@@ -334,7 +334,12 @@ $ragItemCount = $pdo->query("SELECT COUNT(*) FROM rag_knowledge")->fetchColumn()
 
             <!-- RAG Knowledge Base Integration -->
             <div class="card mb-4 shadow-sm">
-                <div class="card-header bg-dark text-white"><i class="fa-solid fa-book-bookmark me-2"></i> RAG Knowledge Base (XML Feeds or WordPress REST API JSON)</div>
+                <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+                    <div><i class="fa-solid fa-book-bookmark me-2"></i> RAG Knowledge Base (XML / JSON Remote Sources)</div>
+                    <button type="button" class="btn btn-sm btn-outline-light" data-bs-toggle="modal" data-bs-target="#ragFormatModal">
+                        <i class="fa-solid fa-circle-question me-1"></i> Format Guide & Examples
+                    </button>
+                </div>
                 <div class="card-body">
                     <div class="mb-3 form-check">
                         <input type="hidden" name="settings[rag_enabled]" value="0">
@@ -342,24 +347,14 @@ $ragItemCount = $pdo->query("SELECT COUNT(*) FROM rag_knowledge")->fetchColumn()
                         <label class="form-check-label fw-bold" for="enableRag">Enable RAG Document Retrieval for AI</label>
                     </div>
 
-                    <div class="alert alert-info py-2 small">
-                        <i class="fa-solid fa-circle-info me-1"></i>
-                        Supported formats:
-                        <ul class="mb-1 mt-1">
-                            <li><strong>XML Feeds:</strong> Standard RSS 2.0 or Atom feeds (e.g. <code>https://example.com/feed/</code>).</li>
-                            <li><strong>WordPress REST API (JSON):</strong> Endpoints returning posts or pages (e.g. <code>https://example.com/wp-json/wp/v2/posts?slug=privacy-policy</code> or <code>https://example.com/wp-json/wp/v2/pages?slug=terms</code>).</li>
-                        </ul>
-                        Do <strong>not</strong> enter direct links to standard HTML pages, PDF files, or images.
-                    </div>
-
                     <div class="row">
                         <div class="col-md-6 mb-3">
-                            <label class="form-label fw-bold">Knowledge Base Source 1 (RSS XML or WP JSON)</label>
-                            <input type="url" name="settings[rag_feed_url_1]" class="form-control" placeholder="https://example.com/wp-json/wp/v2/posts?slug=terms-of-service" value="<?php echo htmlspecialchars(get_setting($pdo, 'rag_feed_url_1', get_setting($pdo, 'rag_tos_feed_url', ''))); ?>">
+                            <label class="form-label fw-bold">Knowledge Base Source 1 (XML / JSON)</label>
+                            <input type="url" name="settings[rag_feed_url_1]" class="form-control" placeholder="https://example.com/feed.xml or https://example.com/api/posts" value="<?php echo htmlspecialchars(get_setting($pdo, 'rag_feed_url_1', get_setting($pdo, 'rag_tos_feed_url', ''))); ?>">
                         </div>
                         <div class="col-md-6 mb-3">
-                            <label class="form-label fw-bold">Knowledge Base Source 2 (RSS XML or WP JSON - Optional)</label>
-                            <input type="url" name="settings[rag_feed_url_2]" class="form-control" placeholder="https://example.com/wp-json/wp/v2/posts?slug=privacy-policy" value="<?php echo htmlspecialchars(get_setting($pdo, 'rag_feed_url_2', get_setting($pdo, 'rag_privacy_feed_url', ''))); ?>">
+                            <label class="form-label fw-bold">Knowledge Base Source 2 (XML / JSON - Optional)</label>
+                            <input type="url" name="settings[rag_feed_url_2]" class="form-control" placeholder="https://example.com/policies.json" value="<?php echo htmlspecialchars(get_setting($pdo, 'rag_feed_url_2', get_setting($pdo, 'rag_privacy_feed_url', ''))); ?>">
                         </div>
                     </div>
 
@@ -478,6 +473,82 @@ $ragItemCount = $pdo->query("SELECT COUNT(*) FROM rag_knowledge")->fetchColumn()
         </form>
     </div>
 </main>
+
+<!-- RAG Knowledge Base Format Documentation Modal -->
+<div class="modal fade" id="ragFormatModal" tabindex="-1" aria-labelledby="ragFormatModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header bg-dark text-white">
+                <h5 class="modal-title" id="ragFormatModalLabel"><i class="fa-solid fa-file-code me-2"></i> Knowledge Base Feed Formatting Guide</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <p>The RAG ingestion crawler accepts public HTTP/HTTPS URLs delivering either <strong>XML</strong> or <strong>JSON</strong> text payloads. Regular HTML pages, binary files, PDFs, or image links are not supported.</p>
+
+                <!-- Section 1: JSON Feeds & APIs -->
+                <h6 class="fw-bold text-primary mt-3"><i class="fa-solid fa-brackets-curly me-1"></i> 1. Generic JSON Feeds & REST APIs</h6>
+                <p class="small text-muted mb-2">The endpoint can return an array of objects or a single object. Supported properties are automatically recognized:</p>
+                
+                <div class="border rounded p-2 bg-light mb-2">
+                    <span class="badge bg-secondary mb-1">Generic List Example</span>
+                    <pre class="mb-0 small font-monospace"><code>[
+  {
+    "id": "item-101",
+    "title": "Refund and Billing Policy",
+    "content": "All subscription fees are non-refundable after 14 days of purchase..."
+  },
+  {
+    "id": "item-102",
+    "title": "Account Termination",
+    "body": "Users may cancel their account at any moment through profile settings..."
+  }
+]</code></pre>
+                </div>
+
+                <div class="border rounded p-2 bg-light mb-3">
+                    <span class="badge bg-secondary mb-1">REST API Nested Example (e.g. Headless CMS / WordPress)</span>
+                    <pre class="mb-0 small font-monospace"><code>[
+  {
+    "id": 45,
+    "slug": "privacy-policy",
+    "title": { "rendered": "Privacy Policy" },
+    "content": { "rendered": "&lt;p&gt;We respect your personal information...&lt;/p&gt;" }
+  }
+]</code></pre>
+                </div>
+
+                <p class="small mb-3"><strong>Recognized JSON property keys:</strong>
+                    <br>&bull; <strong>Identifier:</strong> <code>id</code>, <code>guid</code>, <code>slug</code>, or <code>key</code>
+                    <br>&bull; <strong>Title:</strong> <code>title</code>, <code>name</code>, <code>subject</code>, or <code>heading</code> (or <code>title.rendered</code>)
+                    <br>&bull; <strong>Content:</strong> <code>content</code>, <code>body</code>, <code>text</code>, <code>description</code>, or <code>excerpt</code> (or <code>content.rendered</code>)
+                </p>
+
+                <hr>
+
+                <!-- Section 2: XML Feeds -->
+                <h6 class="fw-bold text-primary"><i class="fa-solid fa-rss me-1"></i> 2. XML Feeds (RSS 2.0 or Atom)</h6>
+                <p class="small text-muted mb-2">Standard RSS 2.0 or Atom feeds are parsed directly:</p>
+
+                <div class="border rounded p-2 bg-light mb-2">
+                    <pre class="mb-0 small font-monospace"><code>&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;rss version="2.0"&gt;
+  &lt;channel&gt;
+    &lt;title&gt;Official Platform Documentation&lt;/title&gt;
+    &lt;item&gt;
+      &lt;guid&gt;tos-section-1&lt;/guid&gt;
+      &lt;title&gt;Terms of Service - General Usage&lt;/title&gt;
+      &lt;description&gt;&lt;![CDATA[You agree not to upload abusive or harmful media...]]&gt;&lt;/description&gt;
+    &lt;/item&gt;
+  &lt;/channel&gt;
+&lt;/rss&gt;</code></pre>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
 
 <script>
     function copyToClipboard(elementId) {
