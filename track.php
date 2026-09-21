@@ -1,6 +1,7 @@
 <?php
 // track.php
-// Public tracking page with Email verification, Reply capability, Staff status actions, Activity Logging, and On-demand Translations
+// Public tracking page with Access Token direct authentication, Email verification fallback, Reply capability, Staff actions, and Translations
+
 session_start();
 require_once __DIR__ . '/includes/config.php';
 require_once __DIR__ . '/includes/turnstile.php';
@@ -32,47 +33,69 @@ $error       = '';
 $success     = '';
 $isFollowing = false;
 
+// Check for newly created ticket flag or session flash
+$justCreated = isset($_GET['created']) || isset($_SESSION['flash_created_ticket']);
+if (isset($_SESSION['flash_created_ticket'])) {
+    unset($_SESSION['flash_created_ticket']);
+}
+
 if (!empty($code)) {
-    if (!$canSearchWithoutEmail && empty($searchEmail)) {
-        $error = __('email_required', 'Please enter the email address associated with the ticket.');
-    } else {
-        if ($canSearchWithoutEmail) {
-            if (!empty($token)) {
-                $stmt = $pdo->prepare("SELECT t.*, c.name as category_name FROM tickets t LEFT JOIN categories c ON t.category_id = c.id WHERE t.tracking_code = ? AND t.access_token = ?");
-                $stmt->execute([$code, $token]);
-            } else {
-                $stmt = $pdo->prepare("SELECT t.*, c.name as category_name FROM tickets t LEFT JOIN categories c ON t.category_id = c.id WHERE t.tracking_code = ?");
-                $stmt->execute([$code]);
+    // 1. Direct secure authentication if access_token is present in URL
+    if (!empty($token)) {
+        $stmt = $pdo->prepare("
+            SELECT t.*, c.name as category_name, u.email as user_email 
+            FROM tickets t 
+            LEFT JOIN categories c ON t.category_id = c.id 
+            LEFT JOIN users u ON t.user_id = u.id 
+            WHERE t.tracking_code = ? AND t.access_token = ?
+        ");
+        $stmt->execute([$code, $token]);
+        $ticket = $stmt->fetch();
+
+        if ($ticket) {
+            // Automatically ensure searchEmail is populated for replies
+            if (empty($searchEmail)) {
+                $searchEmail = $ticket['guest_email'] ?: ($ticket['user_email'] ?? '');
             }
         } else {
-            if (!empty($token)) {
-                $stmt = $pdo->prepare("
-                    SELECT t.*, c.name as category_name 
-                    FROM tickets t 
-                    LEFT JOIN categories c ON t.category_id = c.id 
-                    LEFT JOIN users u ON t.user_id = u.id 
-                    WHERE t.tracking_code = ? 
-                      AND t.access_token = ? 
-                      AND (t.guest_email = ? OR u.email = ?)
-                ");
-                $stmt->execute([$code, $token, $searchEmail, $searchEmail]);
-            } else {
-                $stmt = $pdo->prepare("
-                    SELECT t.*, c.name as category_name 
-                    FROM tickets t 
-                    LEFT JOIN categories c ON t.category_id = c.id 
-                    LEFT JOIN users u ON t.user_id = u.id 
-                    WHERE t.tracking_code = ? 
-                      AND (t.guest_email = ? OR u.email = ?)
-                ");
-                $stmt->execute([$code, $searchEmail, $searchEmail]);
-            }
+            $error = __('ticket_not_found', 'No ticket found matching the specified criteria.');
         }
-
+    } 
+    // 2. Staff query by code only
+    elseif ($canSearchWithoutEmail) {
+        $stmt = $pdo->prepare("
+            SELECT t.*, c.name as category_name, u.email as user_email 
+            FROM tickets t 
+            LEFT JOIN categories c ON t.category_id = c.id 
+            LEFT JOIN users u ON t.user_id = u.id 
+            WHERE t.tracking_code = ?
+        ");
+        $stmt->execute([$code]);
         $ticket = $stmt->fetch();
 
         if (!$ticket) {
             $error = __('ticket_not_found', 'No ticket found matching the specified criteria.');
+        }
+    } 
+    // 3. Manual guest search requiring both code and email
+    else {
+        if (empty($searchEmail)) {
+            $error = __('email_required', 'Please enter the email address associated with the ticket.');
+        } else {
+            $stmt = $pdo->prepare("
+                SELECT t.*, c.name as category_name, u.email as user_email 
+                FROM tickets t 
+                LEFT JOIN categories c ON t.category_id = c.id 
+                LEFT JOIN users u ON t.user_id = u.id 
+                WHERE t.tracking_code = ? 
+                  AND (t.guest_email = ? OR u.email = ?)
+            ");
+            $stmt->execute([$code, $searchEmail, $searchEmail]);
+            $ticket = $stmt->fetch();
+
+            if (!$ticket) {
+                $error = __('ticket_not_found', 'No ticket found matching the specified criteria.');
+            }
         }
     }
 
@@ -197,49 +220,91 @@ $activeLang = $currentLang ?? $_SESSION['lang'] ?? $_COOKIE['site_lang'] ?? $_CO
 
 <main class="main-content">
     <div class="container my-4" style="max-width: 850px;">
-        <h2><?php echo __('track_your_ticket', 'Track Your Ticket'); ?></h2>
-        <hr>
-
-        <?php if ($canSearchWithoutEmail): ?>
-            <?php 
-                $roleLabel = match($userRole) {
-                    'admin'  => __('role_admin', 'Admin'),
-                    'agency' => __('role_agency_manager', 'Agency Manager'),
-                    'agent'  => __('role_agent', 'Agent'),
-                    default  => __('role_staff_member', 'Staff Member')
-                };
-            ?>
-            <div class="alert alert-info py-2 small mb-3">
-                <i class="fa-solid fa-circle-info me-1"></i> 
-                <?php printf(__('staff_search_notice', 'You are logged in as an <strong>%s</strong>, so you can search tickets using only the Tracking Code.'), $roleLabel); ?>
+        
+        <?php if ($ticket): ?>
+            <!-- Ticket Already Loaded View: Clean header without input search boxes -->
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h2 class="m-0"><?php echo __('track_your_ticket', 'Track Your Ticket'); ?></h2>
+                <a href="track.php" class="btn btn-sm btn-outline-secondary">
+                    <i class="fa-solid fa-magnifying-glass me-1"></i> <?php echo __('search_another_ticket', 'Search Another Ticket'); ?>
+                </a>
             </div>
-        <?php elseif ($userRole === 'agent'): ?>
-            <div class="alert alert-warning py-2 small mb-3">
-                <i class="fa-solid fa-triangle-exclamation me-1"></i> 
-                <?php echo __('agent_independent_search_notice', 'As an independent <strong>Agent</strong> (no agency assigned), you must enter both the Tracking Code and the associated Email address to search for tickets.'); ?>
-            </div>
-        <?php endif; ?>
+            <hr>
 
-        <form method="GET" action="track.php" class="row g-3 mb-4">
+            <?php if ($justCreated): ?>
+                <!-- Prominent Success Box shown immediately after redirection from submit.php -->
+                <div class="alert alert-success d-flex flex-column flex-sm-row justify-content-between align-items-sm-center gap-2 mb-4 shadow-sm">
+                    <div>
+                        <i class="fa-solid fa-circle-check fa-lg me-2"></i>
+                        <strong><?php echo __('ticket_submitted_success', 'Ticket submitted successfully!'); ?></strong>
+                        <div class="small text-muted mt-1">
+                            <?php echo __('tracking_code_saved_notice', 'Save your reference code to retrieve this ticket at any time:'); ?>
+                        </div>
+                    </div>
+                    <div class="input-group" style="max-width: 250px;">
+                        <input type="text" class="form-control font-monospace fw-bold bg-white text-center" id="copyCodeInput" value="<?php echo htmlspecialchars($ticket['tracking_code']); ?>" readonly>
+                        <button class="btn btn-dark" type="button" onclick="copyTrackingCode()">
+                            <i class="fa-regular fa-copy me-1"></i> <?php echo __('copy', 'Copy'); ?>
+                        </button>
+                    </div>
+                </div>
+
+                <script>
+                    function copyTrackingCode() {
+                        const input = document.getElementById('copyCodeInput');
+                        input.select();
+                        input.setSelectionRange(0, 99999);
+                        navigator.clipboard.writeText(input.value);
+                    }
+                </script>
+            <?php endif; ?>
+
+        <?php else: ?>
+            <!-- Standard Search Box displayed only when no ticket is loaded -->
+            <h2><?php echo __('track_your_ticket', 'Track Your Ticket'); ?></h2>
+            <hr>
+
             <?php if ($canSearchWithoutEmail): ?>
-                <div class="col-md-8">
-                    <input type="text" name="code" class="form-control" placeholder="<?php echo htmlspecialchars(__('enter_tracking_code_placeholder', 'Enter Tracking Code (e.g. ABC-123-XYZ)')); ?>" value="<?php echo htmlspecialchars($code); ?>" required>
+                <?php 
+                    $roleLabel = match($userRole) {
+                        'admin'  => __('role_admin', 'Admin'),
+                        'agency' => __('role_agency_manager', 'Agency Manager'),
+                        'agent'  => __('role_agent', 'Agent'),
+                        default  => __('role_staff_member', 'Staff Member')
+                    };
+                ?>
+                <div class="alert alert-info py-2 small mb-3">
+                    <i class="fa-solid fa-circle-info me-1"></i> 
+                    <?php printf(__('staff_search_notice', 'You are logged in as an <strong>%s</strong>, so you can search tickets using only the Tracking Code.'), $roleLabel); ?>
                 </div>
-                <div class="col-md-4">
-                    <button type="submit" class="btn btn-primary w-100"><i class="fa-solid fa-magnifying-glass me-1"></i> <?php echo __('search', 'Search Ticket'); ?></button>
-                </div>
-            <?php else: ?>
-                <div class="col-md-5">
-                    <input type="text" name="code" class="form-control" placeholder="<?php echo htmlspecialchars(__('tracking_code_placeholder', 'Tracking Code (e.g. ABC-123-XYZ)')); ?>" value="<?php echo htmlspecialchars($code); ?>" required>
-                </div>
-                <div class="col-md-4">
-                    <input type="email" name="email" class="form-control" placeholder="<?php echo htmlspecialchars(__('ticket_email_placeholder', 'Ticket Email')); ?>" value="<?php echo htmlspecialchars($searchEmail); ?>" required>
-                </div>
-                <div class="col-md-3">
-                    <button type="submit" class="btn btn-primary w-100"><i class="fa-solid fa-magnifying-glass me-1"></i> <?php echo __('search', 'Search'); ?></button>
+            <?php elseif ($userRole === 'agent'): ?>
+                <div class="alert alert-warning py-2 small mb-3">
+                    <i class="fa-solid fa-triangle-exclamation me-1"></i> 
+                    <?php echo __('agent_independent_search_notice', 'As an independent <strong>Agent</strong> (no agency assigned), you must enter both the Tracking Code and the associated Email address to search for tickets.'); ?>
                 </div>
             <?php endif; ?>
-        </form>
+
+            <form method="GET" action="track.php" class="row g-3 mb-4">
+                <?php if ($canSearchWithoutEmail): ?>
+                    <div class="col-md-8">
+                        <input type="text" name="code" class="form-control" placeholder="<?php echo htmlspecialchars(__('enter_tracking_code_placeholder', 'Enter Tracking Code (e.g. ABC-123-XYZ)')); ?>" value="<?php echo htmlspecialchars($code); ?>" required>
+                    </div>
+                    <div class="col-md-4">
+                        <button type="submit" class="btn btn-primary w-100"><i class="fa-solid fa-magnifying-glass me-1"></i> <?php echo __('search', 'Search Ticket'); ?></button>
+                    </div>
+                <?php else: ?>
+                    <div class="col-md-5">
+                        <input type="text" name="code" class="form-control" placeholder="<?php echo htmlspecialchars(__('tracking_code_placeholder', 'Tracking Code (e.g. ABC-123-XYZ)')); ?>" value="<?php echo htmlspecialchars($code); ?>" required>
+                    </div>
+                    <div class="col-md-4">
+                        <input type="email" name="email" class="form-control" placeholder="<?php echo htmlspecialchars(__('ticket_email_placeholder', 'Ticket Email')); ?>" value="<?php echo htmlspecialchars($searchEmail); ?>" required>
+                    </div>
+                    <div class="col-md-3">
+                        <button type="submit" class="btn btn-primary w-100"><i class="fa-solid fa-magnifying-glass me-1"></i> <?php echo __('search', 'Search'); ?></button>
+                    </div>
+                <?php endif; ?>
+            </form>
+        <?php endif; ?>
 
         <?php if ($error): ?><div class="alert alert-danger"><?php echo $error; ?></div><?php endif; ?>
         <?php if ($success): ?><div class="alert alert-success"><?php echo $success; ?></div><?php endif; ?>
@@ -405,7 +470,6 @@ $activeLang = $currentLang ?? $_SESSION['lang'] ?? $_COOKIE['site_lang'] ?? $_CO
             });
         }
 
-        // Helper: retrieve active language code from header select element or fallback to PHP variable
         function getSelectedHeaderLang() {
             const select = document.querySelector('select[name="lang"], select#lang_select, select.language-selector');
             if (select && select.value) {
@@ -414,7 +478,6 @@ $activeLang = $currentLang ?? $_SESSION['lang'] ?? $_COOKIE['site_lang'] ?? $_CO
             return '<?php echo htmlspecialchars($activeLang); ?>';
         }
 
-        // Asynchronous AI reply generator handler
         const btnAI = document.getElementById('btn_generate_ai');
         const spinner = document.getElementById('ai_spinner');
         if (btnAI) {
@@ -451,12 +514,10 @@ $activeLang = $currentLang ?? $_SESSION['lang'] ?? $_COOKIE['site_lang'] ?? $_CO
         const ticketCode  = '<?php echo htmlspecialchars($ticket['tracking_code'] ?? ''); ?>';
         const ticketToken = '<?php echo htmlspecialchars($ticket['access_token'] ?? ''); ?>';
 
-        // Localized string variables for JavaScript toggle buttons
         const labelTranslate    = "<?php echo addslashes(__('translate', 'Translate')); ?>";
         const labelShowOriginal = "<?php echo addslashes(__('show_original', 'Show Original')); ?>";
         const labelTranslating  = "<?php echo addslashes(__('translating', 'Translating...')); ?>";
 
-        // Helper: restore original message display
         function restoreOriginal(card) {
             const origBox     = card.querySelector('.content-original');
             const transBox    = card.querySelector('.content-translated');
@@ -473,7 +534,6 @@ $activeLang = $currentLang ?? $_SESSION['lang'] ?? $_COOKIE['site_lang'] ?? $_CO
             }
         }
 
-        // Helper: render translated message display and update toggle button state
         function showTranslation(card) {
             const origBox     = card.querySelector('.content-original');
             const transBox    = card.querySelector('.content-translated');
@@ -489,7 +549,6 @@ $activeLang = $currentLang ?? $_SESSION['lang'] ?? $_COOKIE['site_lang'] ?? $_CO
             }
         }
 
-        // Translate Toggle Button click handler (Translate / Show Original switch)
         document.querySelectorAll('.btn-translate-toggle').forEach(btn => {
             btn.addEventListener('click', function() {
                 const card       = this.closest('.card-body') || this.closest('.card');
@@ -500,19 +559,16 @@ $activeLang = $currentLang ?? $_SESSION['lang'] ?? $_COOKIE['site_lang'] ?? $_CO
                 const state      = this.getAttribute('data-state') || 'original';
                 const targetLang = getSelectedHeaderLang();
 
-                // If currently showing translated text, clicking toggles back to original
                 if (state === 'translated') {
                     restoreOriginal(card);
                     return;
                 }
 
-                // If translation was already loaded previously, switch instantly without hitting the API
                 if (transText.innerHTML.trim() !== '') {
                     showTranslation(card);
                     return;
                 }
 
-                // Initial translation request
                 const itemType    = this.getAttribute('data-item-type');
                 const itemId      = this.getAttribute('data-item-id');
                 const origBtnHtml = this.innerHTML;
@@ -555,7 +611,6 @@ $activeLang = $currentLang ?? $_SESSION['lang'] ?? $_COOKIE['site_lang'] ?? $_CO
             });
         });
 
-        // Dedicated "Show Original" button click handler inside translation box
         document.querySelectorAll('.btn-restore-orig').forEach(btn => {
             btn.addEventListener('click', function() {
                 const card = this.closest('.card-body') || this.closest('.card');
