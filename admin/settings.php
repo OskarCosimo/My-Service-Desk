@@ -1,8 +1,9 @@
 <?php
 // admin/settings.php
-// Admin configuration settings page with OAuth providers, AI, Theme Branding Customization, Legal links, and Code Injection
+// Admin configuration settings page with OAuth providers, AI, RAG Knowledge, Theme Branding Customization, Legal links, and Code Injection
 session_start();
 require_once __DIR__ . '/../includes/config.php';
+require_once __DIR__ . '/../includes/rag_helper.php';
 
 // Ensure user is authorized as Admin
 if (!isset($_SESSION['user_role']) || $_SESSION['user_role'] !== 'admin') {
@@ -12,7 +13,11 @@ if (!isset($_SESSION['user_role']) || $_SESSION['user_role'] !== 'admin') {
 
 $success = '';
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+// Handle manual RAG Feed Sync request
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action_sync_rag'])) {
+    $syncResult = sync_rag_feeds($pdo, true);
+    $success = 'RAG Feeds synchronized successfully! Processed ' . ($syncResult['total_items'] ?? 0) . ' items.';
+} elseif ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['settings'])) {
     foreach ($_POST['settings'] as $key => $value) {
         $stmt = $pdo->prepare("INSERT INTO settings (setting_key, setting_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)");
         // We do not trim HTML code injections to preserve formatting
@@ -36,6 +41,11 @@ $myetvCallbackUrl   = $baseUrl . '/auth/myetv-callback.php';
 $googleCallbackUrl  = $baseUrl . '/auth/google-callback.php';
 $fbCallbackUrl      = $baseUrl . '/auth/facebook-callback.php';
 $msCallbackUrl      = $baseUrl . '/auth/microsoft-callback.php';
+
+// Get RAG Stats
+$lastSyncTimestamp = (int)get_setting($pdo, 'rag_last_sync_time', '0');
+$lastSyncFormatted = $lastSyncTimestamp > 0 ? date('Y-m-d H:i:s', $lastSyncTimestamp) : 'Never';
+$ragItemCount = $pdo->query("SELECT COUNT(*) FROM rag_knowledge")->fetchColumn();
 ?>
 
 <main class="main-content">
@@ -322,6 +332,43 @@ $msCallbackUrl      = $baseUrl . '/auth/microsoft-callback.php';
                 </div>
             </div>
 
+            <!-- RAG Knowledge Base Integration -->
+            <div class="card mb-4 shadow-sm">
+                <div class="card-header bg-dark text-white"><i class="fa-solid fa-book-bookmark me-2"></i> RAG Knowledge Base (RSS Feeds for ToS & Privacy)</div>
+                <div class="card-body">
+                    <div class="mb-3 form-check">
+                        <input type="hidden" name="settings[rag_enabled]" value="0">
+                        <input type="checkbox" name="settings[rag_enabled]" value="1" class="form-check-input" id="enableRag" <?php echo get_setting($pdo, 'rag_enabled') === '1' ? 'checked' : ''; ?>>
+                        <label class="form-check-label fw-bold" for="enableRag">Enable RAG Document Retrieval for AI</label>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Terms of Service RSS Feed URL</label>
+                            <input type="url" name="settings[rag_tos_feed_url]" class="form-control" placeholder="https://myetv.tv/rss/tos" value="<?php echo htmlspecialchars(get_setting($pdo, 'rag_tos_feed_url', '')); ?>">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Privacy Policy RSS Feed URL</label>
+                            <input type="url" name="settings[rag_privacy_feed_url]" class="form-control" placeholder="https://myetv.tv/rss/privacy" value="<?php echo htmlspecialchars(get_setting($pdo, 'rag_privacy_feed_url', '')); ?>">
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label">Auto-Sync Interval (Hours)</label>
+                            <input type="number" min="1" max="168" name="settings[rag_sync_interval_hours]" class="form-control" value="<?php echo htmlspecialchars(get_setting($pdo, 'rag_sync_interval_hours', '24')); ?>">
+                            <div class="form-text">Sync is verified on-demand when tickets are processed without needing external cronjobs.</div>
+                        </div>
+                        <div class="col-md-8 mb-3 d-flex align-items-center">
+                            <div class="border rounded p-3 bg-light w-100">
+                                <div class="small"><strong>Indexed Documents:</strong> <?php echo (int)$ragItemCount; ?> items</div>
+                                <div class="small"><strong>Last Synchronized:</strong> <?php echo htmlspecialchars($lastSyncFormatted); ?></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Turnstile Settings -->
             <div class="card mb-4 shadow-sm">
                 <div class="card-header bg-secondary text-white">Cloudflare Turnstile</div>
@@ -409,7 +456,15 @@ $msCallbackUrl      = $baseUrl . '/auth/microsoft-callback.php';
             <!-- Dynamic Plugin Settings Hook Injection -->
             <?php trigger_hook('admin_settings_form'); ?>
 
-            <button type="submit" class="btn btn-success btn-lg"><i class="fa-solid fa-floppy-disk me-1"></i> Save Settings</button>
+            <div class="d-flex gap-2">
+                <button type="submit" class="btn btn-success btn-lg"><i class="fa-solid fa-floppy-disk me-1"></i> Save Settings</button>
+            </div>
+        </form>
+
+        <!-- Separate form for manual RSS synchronization -->
+        <form method="POST" action="settings.php" class="mt-2">
+            <input type="hidden" name="action_sync_rag" value="1">
+            <button type="submit" class="btn btn-outline-primary"><i class="fa-solid fa-rotate me-1"></i> Force Sync RAG Feeds Now</button>
         </form>
     </div>
 </main>
