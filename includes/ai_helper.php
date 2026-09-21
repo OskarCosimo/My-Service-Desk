@@ -1,6 +1,6 @@
 <?php
 // includes/ai_helper.php
-// AI Integration Engine for Google Gemini API and Ollama Local Models with RAG Knowledge Augmentation
+// AI Integration Engine for Google Gemini API and Ollama Local Models with Extended RAG Knowledge Augmentation
 
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/rag_helper.php';
@@ -26,12 +26,12 @@ function generate_ai_ticket_reply(PDO $pdo, string $ticketSubject, string $ticke
     $systemPrompt  = "You are a helpful, polite, and professional technical support assistant for a ticket management platform.\n";
     $systemPrompt .= "Your task is to provide a clear, thorough, and direct answer to the customer's questions.\n";
 
-    // Retrieve RAG Context if enabled
+    // Retrieve RAG Context if enabled (retrieve top 5 sections for multi-topic questions)
     if (get_setting($pdo, 'rag_enabled', '0') === '1') {
         sync_rag_feeds($pdo, false);
 
         $queryKeywords = $ticketSubject . " " . mb_substr(strip_tags($ticketMessage), 0, 300);
-        $ragExcerpts = retrieve_rag_context($pdo, $queryKeywords, 3);
+        $ragExcerpts = retrieve_rag_context($pdo, $queryKeywords, 5);
 
         if (!empty($ragExcerpts)) {
             $systemPrompt .= "\nOFFICIAL KNOWLEDGE BASE & POLICY DOCUMENTATION (SINGLE SOURCE OF TRUTH):\n";
