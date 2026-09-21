@@ -16,7 +16,7 @@ $success = '';
 // Handle manual RAG Feed Sync request
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action_sync_rag'])) {
     $syncResult = sync_rag_feeds($pdo, true);
-    $success = 'RAG Feeds synchronized successfully! Processed ' . ($syncResult['total_items'] ?? 0) . ' items.';
+    $success = 'RAG Knowledge feeds synchronized successfully! Processed ' . ($syncResult['total_items'] ?? 0) . ' items.';
 } elseif ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['settings'])) {
     foreach ($_POST['settings'] as $key => $value) {
         $stmt = $pdo->prepare("INSERT INTO settings (setting_key, setting_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)");
@@ -334,7 +334,7 @@ $ragItemCount = $pdo->query("SELECT COUNT(*) FROM rag_knowledge")->fetchColumn()
 
             <!-- RAG Knowledge Base Integration -->
             <div class="card mb-4 shadow-sm">
-                <div class="card-header bg-dark text-white"><i class="fa-solid fa-book-bookmark me-2"></i> RAG Knowledge Base (XML RSS / Atom Feeds)</div>
+                <div class="card-header bg-dark text-white"><i class="fa-solid fa-book-bookmark me-2"></i> RAG Knowledge Base (XML Feeds or WordPress REST API JSON)</div>
                 <div class="card-body">
                     <div class="mb-3 form-check">
                         <input type="hidden" name="settings[rag_enabled]" value="0">
@@ -344,17 +344,22 @@ $ragItemCount = $pdo->query("SELECT COUNT(*) FROM rag_knowledge")->fetchColumn()
 
                     <div class="alert alert-info py-2 small">
                         <i class="fa-solid fa-circle-info me-1"></i>
-                        Provide public, accessible <strong>RSS 2.0 or Atom XML</strong> feed URLs. Do <strong>not</strong> enter links to standard web pages (HTML), PDF files, or images. The crawler parses XML tags (such as <code>&lt;title&gt;</code>, <code>&lt;description&gt;</code>, or <code>&lt;content:encoded&gt;</code>) to index relevant textual chunks into MySQL for contextual AI grounding.
+                        Supported formats:
+                        <ul class="mb-1 mt-1">
+                            <li><strong>XML Feeds:</strong> Standard RSS 2.0 or Atom feeds (e.g. <code>https://example.com/feed/</code>).</li>
+                            <li><strong>WordPress REST API (JSON):</strong> Endpoints returning posts or pages (e.g. <code>https://example.com/wp-json/wp/v2/posts?slug=privacy-policy</code> or <code>https://example.com/wp-json/wp/v2/pages?slug=terms</code>).</li>
+                        </ul>
+                        Do <strong>not</strong> enter direct links to standard HTML pages, PDF files, or images.
                     </div>
 
                     <div class="row">
                         <div class="col-md-6 mb-3">
-                            <label class="form-label fw-bold">Knowledge Base RSS Feed 1 (XML)</label>
-                            <input type="url" name="settings[rag_feed_url_1]" class="form-control" placeholder="https://example.com/feed.xml" value="<?php echo htmlspecialchars(get_setting($pdo, 'rag_feed_url_1', get_setting($pdo, 'rag_tos_feed_url', ''))); ?>">
+                            <label class="form-label fw-bold">Knowledge Base Source 1 (RSS XML or WP JSON)</label>
+                            <input type="url" name="settings[rag_feed_url_1]" class="form-control" placeholder="https://example.com/wp-json/wp/v2/posts?slug=terms-of-service" value="<?php echo htmlspecialchars(get_setting($pdo, 'rag_feed_url_1', get_setting($pdo, 'rag_tos_feed_url', ''))); ?>">
                         </div>
                         <div class="col-md-6 mb-3">
-                            <label class="form-label fw-bold">Knowledge Base RSS Feed 2 (XML - Optional)</label>
-                            <input type="url" name="settings[rag_feed_url_2]" class="form-control" placeholder="https://example.com/policies.xml" value="<?php echo htmlspecialchars(get_setting($pdo, 'rag_feed_url_2', get_setting($pdo, 'rag_privacy_feed_url', ''))); ?>">
+                            <label class="form-label fw-bold">Knowledge Base Source 2 (RSS XML or WP JSON - Optional)</label>
+                            <input type="url" name="settings[rag_feed_url_2]" class="form-control" placeholder="https://example.com/wp-json/wp/v2/posts?slug=privacy-policy" value="<?php echo htmlspecialchars(get_setting($pdo, 'rag_feed_url_2', get_setting($pdo, 'rag_privacy_feed_url', ''))); ?>">
                         </div>
                     </div>
 
@@ -469,7 +474,7 @@ $ragItemCount = $pdo->query("SELECT COUNT(*) FROM rag_knowledge")->fetchColumn()
         <!-- Separate form for manual RSS synchronization -->
         <form method="POST" action="settings.php" class="mt-2">
             <input type="hidden" name="action_sync_rag" value="1">
-            <button type="submit" class="btn btn-outline-primary"><i class="fa-solid fa-rotate me-1"></i> Force Sync RAG Feeds Now</button>
+            <button type="submit" class="btn btn-outline-primary"><i class="fa-solid fa-rotate me-1"></i> Force Sync Knowledge Base Now</button>
         </form>
     </div>
 </main>
