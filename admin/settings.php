@@ -42,11 +42,21 @@ $googleCallbackUrl  = $baseUrl . '/auth/google-callback.php';
 $fbCallbackUrl      = $baseUrl . '/auth/facebook-callback.php';
 $msCallbackUrl      = $baseUrl . '/auth/microsoft-callback.php';
 
+// Check if at least one RAG Feed URL has been saved in the database
+$savedFeed1 = trim(get_setting($pdo, 'rag_feed_url_1', get_setting($pdo, 'rag_tos_feed_url', '')));
+$savedFeed2 = trim(get_setting($pdo, 'rag_feed_url_2', get_setting($pdo, 'rag_privacy_feed_url', '')));
+$hasConfiguredFeed = (!empty($savedFeed1) || !empty($savedFeed2));
+
 // Get RAG Stats
 $lastSyncTimestamp = (int)get_setting($pdo, 'rag_last_sync_time', '0');
 $lastSyncFormatted = $lastSyncTimestamp > 0 ? date('Y-m-d H:i:s', $lastSyncTimestamp) : 'Never';
 $ragItemCount = $pdo->query("SELECT COUNT(*) FROM rag_knowledge")->fetchColumn();
 ?>
+
+<!-- Dedicated standalone form for manual RAG sync to avoid invalid nested form tags -->
+<form id="ragSyncForm" method="POST" action="settings.php">
+    <input type="hidden" name="action_sync_rag" value="1">
+</form>
 
 <main class="main-content">
     <div class="container-fluid">
@@ -372,6 +382,23 @@ $ragItemCount = $pdo->query("SELECT COUNT(*) FROM rag_knowledge")->fetchColumn()
                         </div>
                     </div>
                 </div>
+                <!-- Card Footer with Sync Action & Validation Notice -->
+                <div class="card-footer bg-light d-flex flex-column flex-sm-row justify-content-between align-items-sm-center gap-2">
+                    <div>
+                        <button type="submit" form="ragSyncForm" class="btn btn-primary" <?php echo !$hasConfiguredFeed ? 'disabled' : ''; ?>>
+                            <i class="fa-solid fa-rotate me-1"></i> Force Sync Knowledge Base Now
+                        </button>
+                    </div>
+                    <div class="small text-muted">
+                        <?php if (!$hasConfiguredFeed): ?>
+                            <i class="fa-solid fa-circle-exclamation text-danger me-1"></i>
+                            Save at least one Knowledge Base URL first before synchronizing.
+                        <?php else: ?>
+                            <i class="fa-solid fa-triangle-exclamation text-warning me-1"></i>
+                            Remember: if you modified the URLs above, click "Save Settings" below before syncing.
+                        <?php endif; ?>
+                    </div>
+                </div>
             </div>
 
             <!-- Turnstile Settings -->
@@ -464,12 +491,6 @@ $ragItemCount = $pdo->query("SELECT COUNT(*) FROM rag_knowledge")->fetchColumn()
             <div class="d-flex gap-2">
                 <button type="submit" class="btn btn-success btn-lg"><i class="fa-solid fa-floppy-disk me-1"></i> Save Settings</button>
             </div>
-        </form>
-
-        <!-- Separate form for manual RSS synchronization -->
-        <form method="POST" action="settings.php" class="mt-2">
-            <input type="hidden" name="action_sync_rag" value="1">
-            <button type="submit" class="btn btn-outline-primary"><i class="fa-solid fa-rotate me-1"></i> Force Sync Knowledge Base Now</button>
         </form>
     </div>
 </main>
