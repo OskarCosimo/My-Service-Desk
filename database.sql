@@ -135,3 +135,30 @@ CREATE TABLE IF NOT EXISTS `translations_cache` (
   UNIQUE KEY `uk_item_lang` (`item_type`, `item_id`, `target_lang`),
   KEY `idx_item` (`item_type`, `item_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE IF NOT EXISTS `api_keys` (
+  `id` int unsigned NOT NULL AUTO_INCREMENT,
+  `user_id` int unsigned NOT NULL,
+  `key_name` varchar(100) DEFAULT 'Agent API Key',
+  `api_key` varchar(64) NOT NULL,
+  `is_active` tinyint(1) NOT NULL DEFAULT '1',
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  `revoked_at` datetime DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_api_key` (`api_key`),
+  UNIQUE KEY `uk_user_api_key` (`user_id`),
+  CONSTRAINT `fk_api_keys_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE IF NOT EXISTS `rag_knowledge` (
+  `id` int unsigned NOT NULL AUTO_INCREMENT,
+  `source_type` varchar(50) NOT NULL,
+  `feed_url` varchar(255) NOT NULL,
+  `item_guid` varchar(255) NOT NULL,
+  `title` varchar(255) NOT NULL,
+  `content` mediumtext NOT NULL,
+  `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_feed_item` (`feed_url`, `item_guid`),
+  FULLTEXT KEY `ft_rag_search` (`title`, `content`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
