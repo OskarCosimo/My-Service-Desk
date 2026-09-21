@@ -72,6 +72,24 @@ if (!function_exists('index_exists')) {
 try {
     // --- INCREMENTAL DB MIGRATIONS HERE ---
 
+    // v1.0.45: Create RAG Knowledge Base Table for AI contextual grounding
+    if (!table_exists($pdo, 'rag_knowledge')) {
+        $pdo->exec("
+            CREATE TABLE `rag_knowledge` (
+              `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+              `source_type` VARCHAR(50) NOT NULL,
+              `feed_url` VARCHAR(255) NOT NULL,
+              `item_guid` VARCHAR(255) NOT NULL,
+              `title` VARCHAR(255) NOT NULL,
+              `content` MEDIUMTEXT NOT NULL,
+              `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+              PRIMARY KEY (`id`),
+              UNIQUE KEY `uk_feed_item` (`feed_url`, `item_guid`),
+              FULLTEXT KEY `ft_rag_search` (`title`, `content`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ");
+    }
+
     // v1.0.38: Create API Keys Table for Agent REST API integration
     if (!table_exists($pdo, 'api_keys')) {
         $pdo->exec("
