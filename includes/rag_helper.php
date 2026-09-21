@@ -1,6 +1,6 @@
 <?php
 // includes/rag_helper.php
-// RAG Helper with smart chunking for XML feeds and JSON/REST API endpoints
+// RAG Helper with AI-Driven Multilingual Keyword Translation, Smart Chunking, and MySQL Fulltext Retrieval
 
 require_once __DIR__ . '/config.php';
 
@@ -128,7 +128,7 @@ function process_json_feed(PDO $pdo, string $sourceType, string $url, array $dat
 
         $cleanMainTitle = trim(strip_tags(html_entity_decode($mainTitle, ENT_QUOTES | ENT_HTML5, 'UTF-8')));
 
-        // Split long HTML content into searchable section chunks
+        // Split long HTML content into searchable section chunks based on headings
         $chunks = split_content_into_chunks($cleanMainTitle, $rawContent);
 
         foreach ($chunks as $idx => $chunk) {
@@ -209,16 +209,13 @@ function process_xml_feed(PDO $pdo, string $sourceType, string $url, string $xml
  * @return array Array of chunks with title and clean textual content
  */
 function split_content_into_chunks(string $mainTitle, string $htmlContent): array {
-    // 1. Remove inline scripts, styles, and noscript tags completely along with their inner code
     $cleaned = preg_replace('/<(script|style|noscript)\b[^>]*>(.*?)<\/\1>/is', '', $htmlContent);
 
-    // 2. Look for section headings (h1, h2, h3)
     $pattern = '/<h([1-3])[^>]*>(.*?)<\/h\1>/is';
     $parts = preg_split($pattern, $cleaned, -1, PREG_SPLIT_DELIM_CAPTURE);
 
     $chunks = [];
 
-    // If no headings found or too few parts, fallback to paragraph or single chunk
     if (count($parts) <= 1) {
         $cleanText = trim(strip_tags(html_entity_decode($cleaned, ENT_QUOTES | ENT_HTML5, 'UTF-8')));
         if (!empty($cleanText)) {
@@ -230,7 +227,6 @@ function split_content_into_chunks(string $mainTitle, string $htmlContent): arra
         return $chunks;
     }
 
-    // Capture preamble before first heading if present
     $preamble = trim(strip_tags(html_entity_decode($parts[0], ENT_QUOTES | ENT_HTML5, 'UTF-8')));
     if (!empty($preamble) && mb_strlen($preamble) > 50) {
         $chunks[] = [
@@ -239,7 +235,6 @@ function split_content_into_chunks(string $mainTitle, string $htmlContent): arra
         ];
     }
 
-    // Iterate through captured heading levels, titles, and section contents
     for ($i = 1; $i < count($parts); $i += 3) {
         $headingTitle = trim(strip_tags(html_entity_decode($parts[$i + 1] ?? '', ENT_QUOTES | ENT_HTML5, 'UTF-8')));
         $sectionBody  = trim(strip_tags(html_entity_decode($parts[$i + 2] ?? '', ENT_QUOTES | ENT_HTML5, 'UTF-8')));
@@ -280,7 +275,7 @@ function fetch_feed_content(string $url): ?string {
 }
 
 /**
- * Retrieve relevant excerpts from RAG knowledge base using MySQL FULLTEXT search
+ * Retrieve relevant excerpts from RAG knowledge base using AI-translated search keywords and MySQL FULLTEXT search
  *
  * @param PDO $pdo
  * @param string $searchQuery
@@ -295,6 +290,12 @@ function retrieve_rag_context(PDO $pdo, string $searchQuery, int $limit = 3): ar
         return [];
     }
 
+    // Call AI (1st Call) to extract English technical search keywords from the ticket
+    $englishKeywords = extract_english_keywords_via_ai($pdo, $cleanQuery);
+    
+    // Combine original query with the AI-translated English keywords
+    $expandedQuery = trim($cleanQuery . ' ' . $englishKeywords);
+
     $stmt = $pdo->prepare("
         SELECT title, content, MATCH(title, content) AGAINST (? IN NATURAL LANGUAGE MODE) AS relevance
         FROM rag_knowledge
@@ -302,10 +303,83 @@ function retrieve_rag_context(PDO $pdo, string $searchQuery, int $limit = 3): ar
         ORDER BY relevance DESC
         LIMIT ?
     ");
-    $stmt->bindValue(1, $cleanQuery, PDO::PARAM_STR);
-    $stmt->bindValue(2, $cleanQuery, PDO::PARAM_STR);
+    $stmt->bindValue(1, $expandedQuery, PDO::PARAM_STR);
+    $stmt->bindValue(2, $expandedQuery, PDO::PARAM_STR);
     $stmt->bindValue(3, $limit, PDO::PARAM_INT);
     $stmt->execute();
 
     return $stmt->fetchAll();
+}
+
+/**
+ * First AI Call: Fast keyword translation via active LLM (Ollama or Gemini) with low token budget (max 20 tokens)
+ *
+ * @param PDO $pdo
+ * @param string $text
+ * @return string Space-separated English keywords
+ */
+function extract_english_keywords_via_ai(PDO $pdo, string $text): string {
+    if (get_setting($pdo, 'ai_enabled', '0') !== '1') {
+        return '';
+    }
+
+    $provider  = get_setting($pdo, 'ai_provider', 'gemini');
+    $shortText = mb_substr(strip_tags($text), 0, 300);
+    $prompt    = "Translate this customer support ticket into 5-8 English search keywords for documentation matching:\n\"" . $shortText . "\"\nRespond ONLY with space-separated English keywords:";
+
+    if ($provider === 'ollama') {
+        $ollamaUrl = rtrim(get_setting($pdo, 'ai_ollama_url', 'http://localhost:11434'), '/');
+        $model     = get_setting($pdo, 'ai_ollama_model', 'llama3');
+
+        $ch = curl_init($ollamaUrl . '/api/generate');
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode([
+            'model'   => $model,
+            'prompt'  => $prompt,
+            'stream'  => false,
+            'options' => [
+                'num_predict' => 20,
+                'temperature' => 0.1
+            ]
+        ]));
+        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+        $res = curl_exec($ch);
+        curl_close($ch);
+
+        if ($res) {
+            $data = json_decode($res, true);
+            if (!empty($data['response'])) {
+                return trim(preg_replace('/[^a-zA-Z0-9\s]/', ' ', $data['response']));
+            }
+        }
+    } elseif ($provider === 'gemini') {
+        $apiKey = get_setting($pdo, 'ai_gemini_api_key', '');
+        $model  = get_setting($pdo, 'ai_gemini_model', 'gemini-1.5-flash');
+
+        if (!empty($apiKey)) {
+            $url = "https://generativelanguage.googleapis.com/v1beta/models/" . urlencode($model) . ":generateContent?key=" . urlencode($apiKey);
+            $ch = curl_init($url);
+            curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+            curl_setopt($ch, CURLOPT_POST, true);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode([
+                "contents" => [["parts" => [["text" => $prompt]]]]
+            ]));
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+            $res = curl_exec($ch);
+            curl_close($ch);
+
+            if ($res) {
+                $data = json_decode($res, true);
+                $gen = $data['candidates'][0]['content']['parts'][0]['text'] ?? '';
+                if (!empty($gen)) {
+                    return trim(preg_replace('/[^a-zA-Z0-9\s]/', ' ', $gen));
+                }
+            }
+        }
+    }
+
+    return '';
 }
