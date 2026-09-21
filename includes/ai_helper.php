@@ -1,8 +1,9 @@
 <?php
 // includes/ai_helper.php
-// AI Integration Engine for Google Gemini API and Ollama Local Models
+// AI Integration Engine for Google Gemini API and Ollama Local Models with RAG Knowledge Augmentation
 
 require_once __DIR__ . '/config.php';
+require_once __DIR__ . '/rag_helper.php';
 
 /**
  * Generate AI response based on ticket details and historical context
@@ -13,7 +14,7 @@ require_once __DIR__ . '/config.php';
  * @param array $repliesHistory Array of previous replies
  * @return string|false Generated HTML response or false on failure
  */
-function generate_ai_ticket_reply(PDO $pdo, string$ticketSubject, string $ticketMessage, array$repliesHistory = []) {
+function generate_ai_ticket_reply(PDO $pdo, string $ticketSubject, string $ticketMessage, array $repliesHistory = []) {
     if (get_setting($pdo, 'ai_enabled', '0') !== '1') {
         return false;
     }
@@ -24,20 +25,44 @@ function generate_ai_ticket_reply(PDO $pdo, string$ticketSubject, string $ticket
     // Build Context Prompt
     $systemPrompt  = "You are a helpful, polite, and professional technical support assistant for a ticket management platform.\n";
     $systemPrompt .= "Your task is to provide a clear and direct answer to the user ticket.\n";
-    if (!empty($customInstructions)) {$systemPrompt .= "Specific Administrator Rules & Instructions to follow:\n" . $customInstructions . "\n\n";
+
+    if (!empty($customInstructions)) {
+        $systemPrompt .= "Specific Administrator Rules & Instructions to follow:\n" . $customInstructions . "\n\n";
+    }
+
+    // Retrieve RAG Context if enabled
+    if (get_setting($pdo, 'rag_enabled', '0') === '1') {
+        // Trigger lazy feed sync check
+        sync_rag_feeds($pdo, false);
+
+        // Retrieve relevant knowledge matching ticket subject and message snippet
+        $queryKeywords = $ticketSubject . " " . mb_substr(strip_tags($ticketMessage), 0, 300);
+        $ragExcerpts = retrieve_rag_context($pdo, $queryKeywords, 3);
+
+        if (!empty($ragExcerpts)) {
+            $systemPrompt .= "OFFICIAL POLICIES & KNOWLEDGE BASE DOCUMENTATION (MYETV Terms of Service & Privacy):\n";
+            foreach ($ragExcerpts as $idx => $doc) {
+                // Shorten content snippet if too long to keep context window optimal
+                $snippet = mb_substr($doc['content'], 0, 1200);
+                $systemPrompt .= "[Document #" . ($idx + 1) . " - " . $doc['title'] . "]:\n" . $snippet . "\n\n";
+            }
+            $systemPrompt .= "Instruction: Use the above documentation as the single source of truth when answering questions regarding platform terms, rules, and privacy.\n\n";
+        }
     }
 
     $conversation  = "Ticket Subject: " . $ticketSubject . "\n";
     $conversation .= "Initial Customer Message: " . strip_tags($ticketMessage) . "\n\n";
 
-    if (!empty($repliesHistory)) {$conversation .= "Previous Replies History:\n";
-        foreach ($repliesHistory as $reply) {$sender = !empty($reply['username']) ?$reply['username'] . " (Staff)" : "Customer";
+    if (!empty($repliesHistory)) {
+        $conversation .= "Previous Replies History:\n";
+        foreach ($repliesHistory as $reply) {
+            $sender = !empty($reply['username']) ? $reply['username'] . " (Staff)" : "Customer";
             $conversation .= "- " . $sender . ": " . strip_tags($reply['message']) . "\n";
         }
         $conversation .= "\n";
     }
 
-    $fullPrompt =$systemPrompt . "Given the above context, write a helpful response to the customer. Output clean HTML formatting (using <p>, <ul>, <li>, <b>, <br> tags). Do not include markdown code blocks or ```html wrappers.\n\n" . $conversation;
+    $fullPrompt = $systemPrompt . "Given the above context, write a helpful response to the customer. Output clean HTML formatting (using <p>, <ul>, <li>, <b>, <br> tags). Do not include markdown code blocks or ```html wrappers.\n\n" . $conversation;
 
     if ($provider === 'gemini') {
         return call_gemini_api($pdo, $fullPrompt);
@@ -60,7 +85,7 @@ function call_gemini_api(PDO $pdo, string $prompt) {
         return false;
     }
 
-    $url = "[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/)" . urlencode($model) . ":generateContent?key=" . urlencode($apiKey);
+    $url = "https://generativelanguage.googleapis.com/v1beta/models/" . urlencode($model) . ":generateContent?key=" . urlencode($apiKey);
 
     $payload = json_encode([
         "contents" => [
@@ -89,7 +114,8 @@ function call_gemini_api(PDO $pdo, string $prompt) {
     $generatedText = $data['candidates'][0]['content']['parts'][0]['text'] ?? false;
 
     if ($generatedText) {
-        $generatedText = preg_replace('/^```html\s*/i', '', $generatedText);$generatedText = preg_replace('/^```\s*/i', '', $generatedText);
+        $generatedText = preg_replace('/^```html\s*/i', '', $generatedText);
+        $generatedText = preg_replace('/^```\s*/i', '', $generatedText);
         $generatedText = preg_replace('/\s*```$/i', '', $generatedText);
     }
 
@@ -99,7 +125,7 @@ function call_gemini_api(PDO $pdo, string $prompt) {
 /**
  * Call Local Ollama REST API with full security and generation options
  */
-function call_ollama_api(PDO $pdo, string$prompt) {
+function call_ollama_api(PDO $pdo, string $prompt) {
     $ollamaUrl   = rtrim(get_setting($pdo, 'ai_ollama_url', 'http://localhost:11434'), '/');
     $model       = get_setting($pdo, 'ai_ollama_model', 'llama3');
     $numCtx      = (int)get_setting($pdo, 'ai_ollama_num_ctx', '4096');
@@ -107,7 +133,7 @@ function call_ollama_api(PDO $pdo, string$prompt) {
     $topK        = (int)get_setting($pdo, 'ai_ollama_top_k', '40');
     $topP        = (float)get_setting($pdo, 'ai_ollama_top_p', '0.9');
 
-    $url =$ollamaUrl . "/api/generate";
+    $url = $ollamaUrl . "/api/generate";
 
     $payload = json_encode([
         "model"  => $model,
@@ -124,7 +150,7 @@ function call_ollama_api(PDO $pdo, string$prompt) {
     $ch = curl_init($url);
     curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
     curl_setopt($ch, CURLOPT_POST, true);
-    curl_setopt($ch, CURLOPT_POSTFIELDS,$payload);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_TIMEOUT, 120);
     $response = curl_exec($ch);
@@ -135,10 +161,12 @@ function call_ollama_api(PDO $pdo, string$prompt) {
     }
 
     $data = json_decode($response, true);
-    $generatedText =$data['response'] ?? false;
+    $generatedText = $data['response'] ?? false;
 
-    if ($generatedText) {$generatedText = preg_replace('/^```html\s*/i', '', $generatedText);
-        $generatedText = preg_replace('/^```\s*/i', '', $generatedText);$generatedText = preg_replace('/\s*```$/i', '', $generatedText);
+    if ($generatedText) {
+        $generatedText = preg_replace('/^```html\s*/i', '', $generatedText);
+        $generatedText = preg_replace('/^```\s*/i', '', $generatedText);
+        $generatedText = preg_replace('/\s*```$/i', '', $generatedText);
     }
 
     return $generatedText;
