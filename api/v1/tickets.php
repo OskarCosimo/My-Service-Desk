@@ -1,6 +1,6 @@
 <?php
 // api/v1/tickets.php
-// REST API endpoint for creating tickets using an Agent API Key
+// REST API endpoint for creating tickets using an Agent/Admin API Key with dynamic Rate Limiting
 
 header('Content-Type: application/json; charset=utf-8');
 
@@ -21,13 +21,11 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 // 1. Extract API Key from HTTP Headers (Authorization Bearer or X-API-Key)
 $apiKey = '';
 
-// Try Authorization header first
 $authHeader = $_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? '';
 if (!empty($authHeader) && preg_match('/Bearer\s+(\S+)/i', $authHeader, $matches)) {
     $apiKey = trim($matches[1]);
 }
 
-// Fallback to X-API-Key header
 if (empty($apiKey)) {
     $apiKey = trim($_SERVER['HTTP_X_API_KEY'] ?? '');
 }
@@ -65,12 +63,23 @@ if (!empty($keyRecord['is_banned']) || empty($keyRecord['is_approved'])) {
     http_response_code(403);
     echo json_encode([
         'success' => false,
-        'error'   => 'Forbidden. The associated user account is suspended or not approved.'
+        'error'   => 'Forbidden. The associated user account is suspended or pending approval.'
     ]);
     exit;
 }
 
-// 3. Parse input data (Supports JSON or form POST)
+// 3. Verify Rate Limit for this API Key
+$rateError = '';
+if (!check_api_rate_limit($pdo, $apiKey, $rateError)) {
+    http_response_code(429); // 429 Too Many Requests
+    echo json_encode([
+        'success' => false,
+        'error'   => $rateError
+    ]);
+    exit;
+}
+
+// 4. Parse input payload (Supports JSON or form POST)
 $rawBody = file_get_contents('php://input');
 $data = json_decode($rawBody, true);
 
@@ -112,12 +121,12 @@ if ($categoryId !== null) {
     }
 }
 
-// 4. Generate ticket tokens and insert ticket
+// 5. Generate ticket tokens and insert ticket
 $trackingCode = strtoupper(substr(md5(uniqid((string)mt_rand(), true)), 0, 3) . '-' . substr(md5(uniqid((string)mt_rand(), true)), 0, 3) . '-' . substr(md5(uniqid((string)mt_rand(), true)), 0, 3));
 $accessToken  = bin2hex(random_bytes(32));
 $agentUserId  = (int)$keyRecord['agent_user_id'];
 
-// Check if customer email matches an existing user
+// Check if customer email matches an existing registered user
 $stmtCustomerCheck = $pdo->prepare("SELECT id FROM users WHERE email = ? LIMIT 1");
 $stmtCustomerCheck->execute([$guestEmail]);
 $matchedUser = $stmtCustomerCheck->fetch();
@@ -129,7 +138,7 @@ try {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ");
     
-    // Automatically assign the ticket to the agent owner of this API Key
+    // Automatically assign the ticket to the agent/admin owning this API Key
     $stmtInsert->execute([
         $trackingCode,
         $accessToken,
@@ -144,7 +153,7 @@ try {
 
     $ticketId = (int)$pdo->lastInsertId();
 
-    // 5. Send Notification and Mail
+    // 6. Send Notifications and Confirmation Email
     $createdTicket = [
         'id'            => $ticketId,
         'assigned_to'   => $agentUserId,
@@ -156,7 +165,7 @@ try {
         $pdo,
         $createdTicket,
         "New API Ticket #" . $trackingCode,
-        "Subject: " . $subject . " (Created by API via " . $keyRecord['username'] . ")",
+        "Subject: " . $subject . " (Created via API by " . $keyRecord['username'] . ")",
         $agentUserId
     );
 
@@ -210,8 +219,9 @@ try {
         'tracking_code' => $trackingCode,
         'tracking_url'  => $trackingUrl,
         'created_by'    => [
-            'agent_id'   => $agentUserId,
-            'agent_name' => $keyRecord['username']
+            'user_id'   => $agentUserId,
+            'username'  => $keyRecord['username'],
+            'role'      => $keyRecord['role']
         ]
     ]);
     exit;
