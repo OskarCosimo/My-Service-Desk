@@ -1,6 +1,7 @@
 <?php
 // submit.php
-// Ticket submission page with Category selection, Pre-filled form support, My-WYSIWYG editor, Auto-Assignment engine, and Internal Notifications
+// Ticket submission page with Category selection, Pre-filled form support, My-WYSIWYG editor, Auto-Assignment engine, Notifications, and Immediate Auto-Redirect
+
 session_start();
 require_once __DIR__ . '/includes/config.php';
 require_once __DIR__ . '/includes/turnstile.php';
@@ -83,7 +84,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $shouldSend) {
                     );
 
                     $recipient = $guestEmail;
-                    $trackingUrl = "https://" . $_SERVER['HTTP_HOST'] . "/track.php?code=" . $trackingCode . "&token=" . $accessToken . "&email=" . urlencode($recipient);
+                    $scheme = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on') ? "https" : "http";
+                    $baseUrl = $scheme . "://" . $_SERVER['HTTP_HOST'];
+                    
+                    $trackingUrl = $baseUrl . "/track.php?code=" . urlencode($trackingCode) . "&token=" . urlencode($accessToken) . "&email=" . urlencode($recipient);
                     
                     $emailBody  = "<h3>Ticket Submitted Successfully</h3>";
                     $emailBody .= "<p>Your ticket reference code is: <strong>{$trackingCode}</strong></p>";
@@ -98,7 +102,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $shouldSend) {
                         $stmtQueue->execute([$ticketId]);
 
                         // Trigger non-blocking asynchronous queue processing worker
-                        $workerUrl = "https://" . $_SERVER['HTTP_HOST'] . "/api/process_ai_queue.php";
+                        $workerUrl = $baseUrl . "/api/process_ai_queue.php";
                         $ch = curl_init($workerUrl);
                         curl_setopt($ch, CURLOPT_TIMEOUT, 1);
                         curl_setopt($ch, CURLOPT_NOSIGNAL, 1);
@@ -127,7 +131,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $shouldSend) {
                         'category_name' => $categoryName
                     ]);
 
-                    $success = __('ticket_submitted_success', 'Ticket submitted successfully! Code:') . " <strong>{$trackingCode}</strong>";
+                    // Store flash message in session
+                    $_SESSION['flash_created_ticket'] = $trackingCode;
+
+                    // Immediately redirect directly to the newly created ticket
+                    header("Location: /track.php?code=" . urlencode($trackingCode) . "&token=" . urlencode($accessToken) . "&email=" . urlencode($recipient) . "&created=1");
+                    exit;
                 } else {
                     $error = __('ticket_submit_failed', 'Failed to submit the ticket. Please try again later.');
                 }
@@ -149,8 +158,10 @@ require_once __DIR__ . '/includes/sidebar.php';
     <div class="container my-4" style="max-width: 750px;">
         <h2><?php echo __('submit_a_ticket', 'Submit a Ticket'); ?></h2>
         <hr>
-        <?php if ($error): ?><div class="alert alert-danger" id="submit_error_alert"><?php echo $error; ?></div><?php endif; ?>
-        <?php if ($success): ?><div class="alert alert-success"><?php echo $success; ?></div><?php endif; ?>
+        
+        <?php if ($error): ?>
+            <div class="alert alert-danger" id="submit_error_alert"><?php echo $error; ?></div>
+        <?php endif; ?>
 
         <form id="ticket_form" method="POST" action="submit.php">
             <input type="hidden" name="submit_ticket" value="1">
