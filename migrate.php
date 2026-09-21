@@ -72,6 +72,25 @@ if (!function_exists('index_exists')) {
 try {
     // --- INCREMENTAL DB MIGRATIONS HERE ---
 
+    // v1.0.38: Create API Keys Table for Agent REST API integration
+    if (!table_exists($pdo, 'api_keys')) {
+        $pdo->exec("
+            CREATE TABLE `api_keys` (
+              `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+              `user_id` INT UNSIGNED NOT NULL,
+              `key_name` VARCHAR(100) DEFAULT 'Agent API Key',
+              `api_key` VARCHAR(64) NOT NULL,
+              `is_active` TINYINT(1) NOT NULL DEFAULT '1',
+              `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+              `revoked_at` DATETIME DEFAULT NULL,
+              PRIMARY KEY (`id`),
+              UNIQUE KEY `uk_api_key` (`api_key`),
+              UNIQUE KEY `uk_user_api_key` (`user_id`),
+              CONSTRAINT `fk_api_keys_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ");
+    }
+
     // v1.0.28: Create Translations Cache Table for LibreTranslate on-demand caching
     if (!table_exists($pdo, 'translations_cache')) {
         $pdo->exec("
