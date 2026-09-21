@@ -1,6 +1,6 @@
 <?php
 // profile.php
-// User Profile Settings Page with QR Code 2FA Activation, Auto-Assignment, and Agent API Key Management
+// User Profile Settings Page with QR Code 2FA Activation, Auto-Assignment, and REST API Key Management for Staff (Admin, Agency, Agent)
 session_start();
 require_once __DIR__ . '/includes/config.php';
 require_once __DIR__ . '/includes/totp_helper.php';
@@ -31,9 +31,12 @@ $tempSecret = $_SESSION['temp_2fa_secret'];
 $siteTitle  = get_setting($pdo, 'site_title', 'Support Tickets');
 $qrUri      = get_totp_qr_url($user['email'], $siteTitle, $tempSecret);
 
-// Fetch active or revoked API Key for agent
+// Staff check: Admins, Agencies, and Agents can have an API Key
+$isStaffUser = in_array($user['role'], ['admin', 'agency', 'agent'], true);
+
+// Fetch existing API Key
 $userApiKey = null;
-if (in_array($user['role'], ['agent', 'agency', 'admin'], true)) {
+if ($isStaffUser) {
     $stmtKey = $pdo->prepare("SELECT * FROM api_keys WHERE user_id = ? LIMIT 1");
     $stmtKey->execute([$userId]);
     $userApiKey = $stmtKey->fetch();
@@ -61,7 +64,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     // Update Ticket Auto-Assignment Setting (Agencies & Agents only)
-    if ($action === 'update_auto_assign' && in_array($user['role'], ['admin', 'agency', 'agent'], true)) {
+    if ($action === 'update_auto_assign' && in_array($user['role'], ['agency', 'agent'], true)) {
         $autoAssign = isset($_POST['auto_assign_tickets']) ? 1 : 0;
         
         $stmtAssign = $pdo->prepare("UPDATE users SET auto_assign_tickets = ? WHERE id = ?");
@@ -73,17 +76,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 
-    // Generate or Regenerate API Key (Agent / Agency / Admin)
-    if ($action === 'generate_api_key' && in_array($user['role'], ['admin', 'agency', 'agent'], true)) {
+    // Generate or Regenerate API Key (Admin / Agency / Agent)
+    if ($action === 'generate_api_key' && $isStaffUser) {
         $newApiKey = 'tmk_' . bin2hex(random_bytes(24));
-        $keyName = trim($_POST['key_name'] ?? 'Agent API Key');
+        $keyName = trim($_POST['key_name'] ?? ($user['role'] === 'admin' ? 'Admin API Key' : 'Staff API Key'));
 
         if ($userApiKey) {
-            // Re-generate existing user key
             $stmtKeyUpdate = $pdo->prepare("UPDATE api_keys SET api_key = ?, key_name = ?, is_active = 1, revoked_at = NULL, created_at = NOW() WHERE user_id = ?");
             $stmtKeyUpdate->execute([$newApiKey, $keyName, $userId]);
         } else {
-            // Insert single key
             $stmtKeyInsert = $pdo->prepare("INSERT INTO api_keys (user_id, key_name, api_key, is_active) VALUES (?, ?, ?, 1)");
             $stmtKeyInsert->execute([$userId, $keyName, $newApiKey]);
         }
@@ -95,8 +96,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $success = __('api_key_generated', 'API Key generated successfully. Make sure to keep it secure.');
     }
 
-    // Revoke API Key (Self-service)
-    if ($action === 'revoke_api_key' && in_array($user['role'], ['admin', 'agency', 'agent'], true)) {
+    // Revoke API Key
+    if ($action === 'revoke_api_key' && $isStaffUser) {
         if ($userApiKey) {
             $stmtRevoke = $pdo->prepare("UPDATE api_keys SET is_active = 0, revoked_at = NOW() WHERE user_id = ?");
             $stmtRevoke->execute([$userId]);
@@ -203,8 +204,8 @@ require_once __DIR__ . '/includes/sidebar.php';
             </div>
         </div>
 
-        <!-- REST API Key Management (Agencies & Agents) -->
-        <?php if (in_array($user['role'], ['admin', 'agency', 'agent'], true)): ?>
+        <!-- REST API Key Management (Admins, Agencies, Agents) -->
+        <?php if ($isStaffUser): ?>
             <div class="card mb-4 shadow-sm">
                 <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
                     <span><i class="fa-solid fa-key me-1"></i> <?php echo __('rest_api_key', 'REST API Key'); ?></span>
@@ -254,7 +255,7 @@ require_once __DIR__ . '/includes/sidebar.php';
                             <input type="hidden" name="action" value="generate_api_key">
                             <div class="mb-3">
                                 <label class="form-label"><?php echo __('key_description_label', 'Key Description / Name'); ?></label>
-                                <input type="text" name="key_name" class="form-control" value="Agent API Key" required>
+                                <input type="text" name="key_name" class="form-control" value="<?php echo $user['role'] === 'admin' ? 'Admin API Key' : 'Staff API Key'; ?>" required>
                             </div>
                             <button type="submit" class="btn btn-primary btn-sm">
                                 <i class="fa-solid fa-key me-1"></i> <?php echo __('generate_new_api_key', 'Generate New API Key'); ?>
@@ -265,8 +266,8 @@ require_once __DIR__ . '/includes/sidebar.php';
             </div>
         <?php endif; ?>
 
-        <!-- Ticket Auto-Assignment Card (For Agencies and Agents) -->
-        <?php if (in_array($user['role'], ['admin', 'agency', 'agent'], true)): ?>
+        <!-- Ticket Auto-Assignment Card (For Agencies and Agents only) -->
+        <?php if (in_array($user['role'], ['agency', 'agent'], true)): ?>
             <div class="card mb-4 shadow-sm">
                 <div class="card-header bg-dark text-white fw-bold">
                     <i class="fa-solid fa-robot me-1"></i> <?php echo __('ticket_management_settings', 'Ticket Management Settings'); ?>
