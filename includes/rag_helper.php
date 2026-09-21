@@ -19,9 +19,13 @@ function sync_rag_feeds(PDO $pdo, bool $force = false): array {
         return ['synced' => false, 'reason' => 'Cache still valid'];
     }
 
+    // Support generic keys with fallback to previous keys if already stored
+    $feed1 = trim(get_setting($pdo, 'rag_feed_url_1', get_setting($pdo, 'rag_tos_feed_url', '')));
+    $feed2 = trim(get_setting($pdo, 'rag_feed_url_2', get_setting($pdo, 'rag_privacy_feed_url', '')));
+
     $feeds = [
-        'tos'     => trim(get_setting($pdo, 'rag_tos_feed_url', '')),
-        'privacy' => trim(get_setting($pdo, 'rag_privacy_feed_url', ''))
+        'feed_1' => $feed1,
+        'feed_2' => $feed2
     ];
 
     $totalImported = 0;
