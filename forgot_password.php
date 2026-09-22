@@ -1,5 +1,5 @@
 <?php
-// forgot_password.php
+// /var/www/support.myetv.tv/forgot_password.php
 // Password recovery request page with mandatory 2FA check
 session_start();
 require_once __DIR__ . '/includes/config.php';
@@ -55,10 +55,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $stmt->execute([$userId]);
             $user = $stmt->fetch();
 
-            require_once __DIR__ . '/includes/GoogleAuthenticator.php';
-            $ga = new PHPGangsta_GoogleAuthenticator();
+            require_once __DIR__ . '/includes/totp_helper.php';
 
-            if ($user && $ga->verifyCode($user['two_factor_secret'], $code, 2)) {
+            if ($user && verify_totp_code($user['two_factor_secret'], $code)) {
                 unset($_SESSION['reset_2fa_user_id']);
                 sendResetEmail($pdo, $user);
                 $message = "2FA verified! A password reset link has been sent to your email address.";
@@ -94,7 +93,7 @@ function sendResetEmail(PDO $pdo, array $user) {
     $body .= "<p>Or copy and paste this link into your browser:<br><a href='{$resetUrl}'>{$resetUrl}</a></p>";
     $body .= "<p><small>This link will expire in 1 hour. If you did not request this reset, please ignore this email.</small></p>";
 
-    // Invia email usando la funzione definita in includes/mailer.php
+    // Send email using the function defined in includes/mailer.php
     send_ticket_email($pdo, $user['email'], $recipientName, $subject, $body);
 }
 
