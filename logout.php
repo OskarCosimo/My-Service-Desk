@@ -1,7 +1,11 @@
 <?php
 // logout.php
-// Session destruction and logout
-session_start();
+// Session destruction, Remember Me token revocation, and logout
+require_once __DIR__ . '/includes/config.php';
+
+// Revoke persistent token from database and clear cookie
+clear_remember_me_token($pdo);
+
 $_SESSION = array();
 
 if (ini_get("session.use_cookies")) {
