@@ -1,7 +1,6 @@
 <?php
 // login_2fa.php
 // 2FA Verification Page during Login Flow
-session_start();
 require_once __DIR__ . '/includes/config.php';
 require_once __DIR__ . '/includes/totp_helper.php';
 
@@ -18,15 +17,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if (verify_totp_code($pendingUser['two_factor_secret'], $totpCode)) {
         // Complete Authentication
-        $_SESSION['user_id']   = $pendingUser['id'];
-        $_SESSION['username']  = $pendingUser['username'];
-        $_SESSION['user_role'] = $pendingUser['role'];
-        $_SESSION['user_email']= $pendingUser['email'];
+        $_SESSION['user_id']    = $pendingUser['id'];
+        $_SESSION['username']   = $pendingUser['username'];
+        $_SESSION['user_role']  = $pendingUser['role'];
+        $_SESSION['user_email'] = $pendingUser['email'];
+
+        // Apply persistent remember-me token if requested
+        if (!empty($pendingUser['remember_me'])) {
+            create_remember_me_token($pdo, (int)$pendingUser['id']);
+        }
 
         unset($_SESSION['2fa_pending_user']);
 
         // Redirect based on role
-        if (in_array($pendingUser['role'], ['admin', 'agent'], true)) {
+        if (in_array($pendingUser['role'], ['admin', 'agent', 'agency'], true)) {
             header("Location: /admin/dashboard.php");
         } else {
             header("Location: /index.php");
