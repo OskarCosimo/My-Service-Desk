@@ -3,6 +3,7 @@
 // Core configuration and DB connection
 require_once __DIR__ . '/rate_limiter.php';
 require_once __DIR__ . '/i18n.php';
+require_once __DIR__ . '/remember_me.php';
 
 define('DB_HOST', 'localhost');
 define('DB_NAME', '');
@@ -35,3 +36,7 @@ function get_setting(PDO $pdo, string $key, string $default = ''): string {
 
 // Load plugins system AFTER $pdo connection is initialized
 require_once __DIR__ . '/../plugins/plugins.php';
+
+// Initialize session and perform silent auto-login via remember-me cookie if needed
+init_secure_session();
+check_remember_me_login($pdo);
