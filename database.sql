@@ -51,6 +51,19 @@ CREATE TABLE IF NOT EXISTS `users` (
   CONSTRAINT `fk_users_agency` FOREIGN KEY (`agency_id`) REFERENCES `users` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
+CREATE TABLE IF NOT EXISTS `user_remember_tokens` (
+  `id` int unsigned NOT NULL AUTO_INCREMENT,
+  `user_id` int unsigned NOT NULL,
+  `selector` varchar(24) NOT NULL,
+  `token_hash` varchar(64) NOT NULL,
+  `expires_at` datetime NOT NULL,
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_selector` (`selector`),
+  KEY `idx_remember_user_id` (`user_id`),
+  CONSTRAINT `fk_remember_tokens_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
 CREATE TABLE IF NOT EXISTS `rate_limits` (
   `id` int unsigned NOT NULL AUTO_INCREMENT,
   `action_key` varchar(50) NOT NULL,
