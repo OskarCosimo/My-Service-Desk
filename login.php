@@ -1,7 +1,6 @@
 <?php
 // login.php
-// Unified Login page with OAuth integration, Ban checks, and Account Approval Verification
-session_start();
+// Unified Login page with OAuth integration, Ban checks, Account Approval Verification, and Remember Me
 require_once __DIR__ . '/includes/config.php';
 require_once __DIR__ . '/includes/turnstile.php';
 
@@ -18,6 +17,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } else {
             $email = trim($_POST['email'] ?? '');
             $password = trim($_POST['password'] ?? '');
+            $rememberMe = !empty($_POST['remember_me']);
 
             $stmt = $pdo->prepare("SELECT * FROM users WHERE email = ?");
             $stmt->execute([$email]);
@@ -55,17 +55,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         'username'           => $user['username'] ?? $user['email'],
                         'role'               => $user['role'],
                         'email'              => $user['email'],
-                        'two_factor_secret'  => $user['two_factor_secret']
+                        'two_factor_secret'  => $user['two_factor_secret'],
+                        'remember_me'        => $rememberMe
                     ];
                     header("Location: /login_2fa.php");
                     exit;
                 } 
                 // 4. Complete Direct Login
                 else {
-                    $_SESSION['user_id']   = $user['id'];
-                    $_SESSION['user_email']= $user['email'];
-                    $_SESSION['user_role'] = $user['role'];
-                    $_SESSION['username']  = $user['username'] ?? $user['email'];
+                    $_SESSION['user_id']    = $user['id'];
+                    $_SESSION['user_email'] = $user['email'];
+                    $_SESSION['user_role']  = $user['role'];
+                    $_SESSION['username']   = $user['username'] ?? $user['email'];
+
+                    if ($rememberMe) {
+                        create_remember_me_token($pdo, (int)$user['id']);
+                    }
 
                     header("Location: " . (in_array($user['role'], ['admin', 'agent', 'agency'], true) ? "/admin/dashboard.php" : "/index.php"));
                     exit;
@@ -105,6 +110,12 @@ $hasSso        = $myetvEnabled || $googleEnabled || $fbEnabled || $msEnabled;
                             <a href="/forgot_password.php" class="small text-decoration-none"><?php echo __('forgot_password', 'Forgot Password?'); ?></a>
                         </div>
                         <input type="password" name="password" class="form-control" required>
+                    </div>
+
+                    <!-- Remember Me Checkbox -->
+                    <div class="mb-3 form-check">
+                        <input type="checkbox" class="form-check-input" id="rememberMeCheck" name="remember_me" value="1">
+                        <label class="form-check-label user-select-none" for="rememberMeCheck"><?php echo __('remember_me', 'Remember me'); ?></label>
                     </div>
 
                     <?php if (get_setting($pdo, 'turnstile_enabled', '0') === '1'): ?>
