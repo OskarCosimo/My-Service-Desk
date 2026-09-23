@@ -72,20 +72,20 @@ if (!function_exists('index_exists')) {
 try {
     // --- INCREMENTAL DB MIGRATIONS HERE ---
 
-    // v1.0.45: Create RAG Knowledge Base Table for AI contextual grounding
-    if (!table_exists($pdo, 'rag_knowledge')) {
+    // v1.0.39: Create Remember Me Tokens table for persistent login
+    if (!table_exists($pdo, 'user_remember_tokens')) {
         $pdo->exec("
-            CREATE TABLE `rag_knowledge` (
+            CREATE TABLE `user_remember_tokens` (
               `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
-              `source_type` VARCHAR(50) NOT NULL,
-              `feed_url` VARCHAR(255) NOT NULL,
-              `item_guid` VARCHAR(255) NOT NULL,
-              `title` VARCHAR(255) NOT NULL,
-              `content` MEDIUMTEXT NOT NULL,
-              `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+              `user_id` INT UNSIGNED NOT NULL,
+              `selector` VARCHAR(24) NOT NULL,
+              `token_hash` VARCHAR(64) NOT NULL,
+              `expires_at` DATETIME NOT NULL,
+              `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
               PRIMARY KEY (`id`),
-              UNIQUE KEY `uk_feed_item` (`feed_url`, `item_guid`),
-              FULLTEXT KEY `ft_rag_search` (`title`, `content`)
+              UNIQUE KEY `uk_selector` (`selector`),
+              KEY `idx_user_id` (`user_id`),
+              CONSTRAINT `fk_remember_tokens_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         ");
     }
